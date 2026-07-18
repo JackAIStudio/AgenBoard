@@ -1,7 +1,11 @@
 import UIKit
 import ObjectiveC.runtime
 
-final class KeyboardViewController: UIInputViewController {
+final class KeyboardViewController: UIInputViewController,
+    UICollectionViewDataSource,
+    UICollectionViewDelegateFlowLayout {
+    private static let pinyinCandidatePageSize = 48
+    private static let pinyinCandidateCellIdentifier = "PinyinCandidateCell"
     private enum ContentModule: Int {
         case voice = 0
         case phrases = 1
@@ -85,7 +89,11 @@ final class KeyboardViewController: UIInputViewController {
     private weak var pinyinCandidateStack: UIStackView?
     private weak var pinyinCandidateScrollView: UIScrollView?
     private weak var pinyinCandidateExpansionButton: UIButton?
+    private weak var expandedPinyinCandidateCollectionView: UICollectionView?
     private var isPinyinCandidatePanelExpanded = false
+    private var hasMorePinyinCandidates = false
+    private var isLoadingMorePinyinCandidates = false
+    private var nextPinyinCandidateOffset = 0
     private var typingLetterButtons: [(button: UIButton, value: String)] = []
     private weak var shiftButton: UIButton?
     private var shiftState = ShiftState.off
@@ -298,6 +306,8 @@ final class KeyboardViewController: UIInputViewController {
         pinyinCandidateStack = nil
         pinyinCandidateScrollView = nil
         pinyinCandidateExpansionButton = nil
+        expandedPinyinCandidateCollectionView = nil
+        isLoadingMorePinyinCandidates = false
     }
 
     private func makeModuleSwitcher() -> UIView {
@@ -590,15 +600,20 @@ final class KeyboardViewController: UIInputViewController {
         headerRow?.isHidden = showsExpandedCandidates
 
         if showsExpandedCandidates {
-            pinyinCandidates = PinyinInputEngine.candidates(
+            let page = PinyinInputEngine.firstCandidatePage(
                 for: pinyinComposition,
-                limit: 48
+                limit: Self.pinyinCandidatePageSize
             )
+            pinyinCandidates = page.candidates
+            hasMorePinyinCandidates = page.hasMore
+            nextPinyinCandidateOffset = page.nextOffset
             keyboardModuleStack.addArrangedSubview(makeExpandedPinyinCandidatePanel())
             return
         }
 
         isPinyinCandidatePanelExpanded = false
+        hasMorePinyinCandidates = false
+        nextPinyinCandidateOffset = 0
         headerRow?.isHidden = false
         updateHeaderLeadingContent()
 
@@ -827,122 +842,151 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func makeExpandedPinyinCandidatePanel() -> UIView {
-        let candidates = pinyinCandidates.isEmpty
-            ? [pinyinComposition]
-            : pinyinCandidates
-        let contentStack = UIStackView()
-        contentStack.axis = .vertical
-        contentStack.alignment = .fill
-        contentStack.spacing = 7
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-
-        var candidateIndex = 0
-        var isFirstRow = true
-        while candidateIndex < candidates.count {
-            let candidateCapacity = isFirstRow ? 5 : 6
-            let endIndex = min(candidateIndex + candidateCapacity, candidates.count)
-            var views: [UIView] = []
-
-            for index in candidateIndex..<endIndex {
-                views.append(
-                    makeExpandedCandidateButton(
-                        title: candidates[index],
-                        value: candidates[index],
-                        isPrimary: index == 0
-                    )
-                )
-            }
-
-            while views.count < candidateCapacity {
-                views.append(UIView())
-            }
-
-            if isFirstRow {
-                var collapseConfiguration = UIButton.Configuration.plain()
-                collapseConfiguration.image = UIImage(systemName: "chevron.up")
-                collapseConfiguration.preferredSymbolConfigurationForImage = .init(
-                    pointSize: 14,
-                    weight: .semibold
-                )
-                collapseConfiguration.baseForegroundColor = .secondaryLabel
-                collapseConfiguration.contentInsets = .zero
-                let collapseButton = UIButton(configuration: collapseConfiguration)
-                collapseButton.addTarget(
-                    self,
-                    action: #selector(collapsePinyinCandidates),
-                    for: .touchUpInside
-                )
-                addHapticFeedback(to: collapseButton, selection: true)
-                collapseButton.accessibilityLabel = "收起候选词"
-                views.append(collapseButton)
-            }
-
-            let row = UIStackView(arrangedSubviews: views)
-            row.axis = .horizontal
-            row.alignment = .fill
-            row.distribution = .fillEqually
-            row.spacing = 5
-            row.heightAnchor.constraint(equalToConstant: 43).isActive = true
-            contentStack.addArrangedSubview(row)
-
-            candidateIndex = endIndex
-            isFirstRow = false
+        if pinyinCandidates.isEmpty {
+            pinyinCandidates = [pinyinComposition]
+            hasMorePinyinCandidates = false
         }
 
-        let scrollView = UIScrollView()
-        scrollView.alwaysBounceVertical = true
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.addSubview(contentStack)
+        let layout = UICollectionViewFlowLayout()
+        layout.scrollDirection = .vertical
+        layout.minimumInteritemSpacing = 5
+        layout.minimumLineSpacing = 7
+        layout.sectionInset = .init(top: 3, left: 3, bottom: 4, right: 3)
 
-        NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.leadingAnchor,
-                constant: 3
-            ),
-            contentStack.trailingAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.trailingAnchor,
-                constant: -3
-            ),
-            contentStack.topAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.topAnchor,
-                constant: 3
-            ),
-            contentStack.bottomAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.bottomAnchor,
-                constant: -4
-            ),
-            contentStack.widthAnchor.constraint(
-                equalTo: scrollView.frameLayoutGuide.widthAnchor,
-                constant: -6
-            )
-        ])
-
-        return scrollView
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.backgroundColor = .clear
+        collectionView.alwaysBounceVertical = true
+        collectionView.showsVerticalScrollIndicator = false
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.register(
+            PinyinCandidateCollectionCell.self,
+            forCellWithReuseIdentifier: Self.pinyinCandidateCellIdentifier
+        )
+        expandedPinyinCandidateCollectionView = collectionView
+        return collectionView
     }
 
-    private func makeExpandedCandidateButton(
-        title: String,
-        value: String,
-        isPrimary: Bool
-    ) -> UIButton {
-        var configuration = UIButton.Configuration.filled()
-        configuration.title = title
-        configuration.baseForegroundColor = .label
-        configuration.baseBackgroundColor = isPrimary ? .systemGray4 : .clear
-        configuration.cornerStyle = .medium
-        configuration.contentInsets = .zero
+    func collectionView(
+        _ collectionView: UICollectionView,
+        numberOfItemsInSection section: Int
+    ) -> Int {
+        max(6, pinyinCandidates.count + 1)
+    }
 
-        let button = UIButton(configuration: configuration)
-        button.titleLabel?.font = .systemFont(ofSize: 17, weight: .regular)
-        button.addAction(
-            UIAction { [weak self] _ in
-                self?.commitPinyinCandidate(value)
-            },
-            for: .touchUpInside
+    func collectionView(
+        _ collectionView: UICollectionView,
+        cellForItemAt indexPath: IndexPath
+    ) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(
+            withReuseIdentifier: Self.pinyinCandidateCellIdentifier,
+            for: indexPath
+        ) as! PinyinCandidateCollectionCell
+
+        if indexPath.item == 5 {
+            cell.configureAsCollapseButton()
+        } else if let candidateIndex = expandedCandidateIndex(for: indexPath.item) {
+            cell.configure(
+                title: pinyinCandidates[candidateIndex],
+                isPrimary: candidateIndex == 0
+            )
+        } else {
+            cell.configureAsPlaceholder()
+        }
+        return cell
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        didSelectItemAt indexPath: IndexPath
+    ) {
+        if hapticsEnabled {
+            keyFeedbackGenerator.prepare()
+            keyFeedbackGenerator.impactOccurred(intensity: 0.5)
+        }
+
+        if indexPath.item == 5 {
+            collapsePinyinCandidates()
+        } else if let candidateIndex = expandedCandidateIndex(for: indexPath.item) {
+            commitPinyinCandidate(pinyinCandidates[candidateIndex])
+        }
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        shouldSelectItemAt indexPath: IndexPath
+    ) -> Bool {
+        indexPath.item == 5 || expandedCandidateIndex(for: indexPath.item) != nil
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        willDisplay cell: UICollectionViewCell,
+        forItemAt indexPath: IndexPath
+    ) {
+        guard let candidateIndex = expandedCandidateIndex(for: indexPath.item),
+              candidateIndex >= pinyinCandidates.count - 6 else {
+            return
+        }
+        loadMorePinyinCandidatesIfNeeded()
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === expandedPinyinCandidateCollectionView,
+              scrollView.contentSize.height > 0 else {
+            return
+        }
+        let distanceToBottom = scrollView.contentSize.height
+            - scrollView.contentOffset.y
+            - scrollView.bounds.height
+        if distanceToBottom < 86 {
+            loadMorePinyinCandidatesIfNeeded()
+        }
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        layout collectionViewLayout: UICollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> CGSize {
+        let horizontalInsets: CGFloat = 6
+        let totalSpacing: CGFloat = 25
+        let width = floor(
+            (collectionView.bounds.width - horizontalInsets - totalSpacing) / 6
         )
-        addHapticFeedback(to: button)
-        button.accessibilityLabel = "输入候选词 \(title)"
-        return button
+        return CGSize(width: max(1, width), height: 43)
+    }
+
+    private func expandedCandidateIndex(for itemIndex: Int) -> Int? {
+        let candidateIndex = itemIndex < 5 ? itemIndex : itemIndex - 1
+        guard itemIndex != 5,
+              pinyinCandidates.indices.contains(candidateIndex) else {
+            return nil
+        }
+        return candidateIndex
+    }
+
+    private func loadMorePinyinCandidatesIfNeeded() {
+        guard isPinyinCandidatePanelExpanded,
+              hasMorePinyinCandidates,
+              !isLoadingMorePinyinCandidates,
+              let collectionView = expandedPinyinCandidateCollectionView else {
+            return
+        }
+
+        isLoadingMorePinyinCandidates = true
+        let page = PinyinInputEngine.nextCandidatePage(
+            for: pinyinComposition,
+            offset: nextPinyinCandidateOffset,
+            limit: Self.pinyinCandidatePageSize
+        )
+        var seen = Set(pinyinCandidates)
+        let newCandidates = page.candidates.filter { seen.insert($0).inserted }
+        pinyinCandidates.append(contentsOf: newCandidates)
+        hasMorePinyinCandidates = page.hasMore
+        nextPinyinCandidateOffset = page.nextOffset
+        isLoadingMorePinyinCandidates = false
+        collectionView.reloadData()
     }
 
     private func characterSpecs(
@@ -2286,6 +2330,94 @@ final class KeyboardViewController: UIInputViewController {
 
 private final class PinyinCandidateButton: UIButton {
     var candidateValue = ""
+}
+
+private final class PinyinCandidateCollectionCell: UICollectionViewCell {
+    private let titleLabel = UILabel()
+    private let imageView = UIImageView()
+    private var baseBackgroundColor: UIColor = .clear
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureLayout()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureLayout()
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            contentView.backgroundColor = isHighlighted
+                ? .systemGray3
+                : baseBackgroundColor
+        }
+    }
+
+    func configure(title: String, isPrimary: Bool) {
+        titleLabel.text = title
+        titleLabel.isHidden = false
+        imageView.isHidden = true
+        baseBackgroundColor = isPrimary ? .systemGray4 : .clear
+        contentView.backgroundColor = baseBackgroundColor
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = "输入候选词 \(title)"
+    }
+
+    func configureAsCollapseButton() {
+        titleLabel.isHidden = true
+        imageView.isHidden = false
+        imageView.image = UIImage(systemName: "chevron.up")
+        baseBackgroundColor = .clear
+        contentView.backgroundColor = baseBackgroundColor
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = "收起候选词"
+    }
+
+    func configureAsPlaceholder() {
+        titleLabel.isHidden = true
+        imageView.isHidden = true
+        baseBackgroundColor = .clear
+        contentView.backgroundColor = baseBackgroundColor
+        isAccessibilityElement = false
+        accessibilityLabel = nil
+    }
+
+    private func configureLayout() {
+        contentView.layer.cornerRadius = 8
+        contentView.layer.cornerCurve = .continuous
+
+        titleLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        titleLabel.textColor = .label
+        titleLabel.textAlignment = .center
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.72
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(titleLabel)
+
+        imageView.tintColor = .secondaryLabel
+        imageView.preferredSymbolConfiguration = .init(
+            pointSize: 14,
+            weight: .semibold
+        )
+        imageView.contentMode = .center
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 2),
+            titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2),
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor),
+            titleLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            imageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+    }
 }
 
 private final class KeyboardTypingSurfaceView: UIView {

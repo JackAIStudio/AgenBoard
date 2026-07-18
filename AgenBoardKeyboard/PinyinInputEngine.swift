@@ -1,5 +1,11 @@
 import Foundation
 
+struct PinyinCandidatePage {
+    let candidates: [String]
+    let hasMore: Bool
+    let nextOffset: Int
+}
+
 struct PinyinInputEngine {
     static func prepare() {
         if RimePinyinEngine.shared.prepare() {
@@ -14,6 +20,13 @@ struct PinyinInputEngine {
     }
 
     static func candidates(for composition: String, limit: Int = 12) -> [String] {
+        firstCandidatePage(for: composition, limit: limit).candidates
+    }
+
+    static func firstCandidatePage(
+        for composition: String,
+        limit: Int = 48
+    ) -> PinyinCandidatePage {
         // Warmup normally finishes before the first key. If a host opens the
         // extension and immediately types, wait for the same serialized setup
         // here instead of building the much slower legacy CJK index on the UI
@@ -21,14 +34,38 @@ struct PinyinInputEngine {
         if !composition.isEmpty {
             _ = RimePinyinEngine.shared.prepare()
         }
-        if let candidates = RimePinyinEngine.shared.candidates(
+        if let page = RimePinyinEngine.shared.firstCandidatePage(
             for: composition,
             limit: limit
         ) {
-            return candidates
+            return page
         }
 
-        return fallbackCandidates(for: composition, limit: limit)
+        return fallbackCandidatePage(
+            for: composition,
+            offset: 0,
+            limit: limit
+        )
+    }
+
+    static func nextCandidatePage(
+        for composition: String,
+        offset: Int,
+        limit: Int = 48
+    ) -> PinyinCandidatePage {
+        if let page = RimePinyinEngine.shared.nextCandidatePage(
+            for: composition,
+            offset: offset,
+            limit: limit
+        ) {
+            return page
+        }
+
+        return fallbackCandidatePage(
+            for: composition,
+            offset: offset,
+            limit: limit
+        )
     }
 
     static func selectedText(
@@ -97,6 +134,40 @@ struct PinyinInputEngine {
         }
 
         return results
+    }
+
+    private static func fallbackCandidatePage(
+        for composition: String,
+        offset: Int,
+        limit: Int
+    ) -> PinyinCandidatePage {
+        guard offset >= 0, limit > 0 else {
+            return PinyinCandidatePage(
+                candidates: [],
+                hasMore: false,
+                nextOffset: max(0, offset)
+            )
+        }
+
+        let requestedCount = offset + limit + 1
+        let candidates = fallbackCandidates(
+            for: composition,
+            limit: requestedCount
+        )
+        guard offset < candidates.count else {
+            return PinyinCandidatePage(
+                candidates: [],
+                hasMore: false,
+                nextOffset: offset
+            )
+        }
+
+        let endIndex = min(offset + limit, candidates.count)
+        return PinyinCandidatePage(
+            candidates: Array(candidates[offset..<endIndex]),
+            hasMore: endIndex < candidates.count,
+            nextOffset: endIndex
+        )
     }
 
     private static let characterIndex: [String: String] = {

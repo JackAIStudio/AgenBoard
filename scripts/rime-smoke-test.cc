@@ -50,6 +50,68 @@ bool HasExpectedFirstCandidate(RimeApi* rime,
   return !candidates.empty() && candidates.front() == expected_candidate;
 }
 
+bool HasCandidateOnLaterPage(RimeApi* rime,
+                             RimeSessionId session,
+                             const char* input,
+                             const char* expected_candidate) {
+  rime->clear_composition(session);
+  for (const char* cursor = input; *cursor; ++cursor) {
+    if (!rime->process_key(session, *cursor, 0)) {
+      return false;
+    }
+  }
+
+  for (int page = 0; page < 32; ++page) {
+    const auto candidates = Candidates(rime, session);
+    for (const auto& candidate : candidates) {
+      if (candidate == expected_candidate) {
+        return page > 0;
+      }
+    }
+
+    RIME_STRUCT(RimeContext, context);
+    if (!rime->get_context(session, &context)) {
+      return false;
+    }
+    const bool is_last_page = context.menu.is_last_page;
+    rime->free_context(&context);
+    if (is_last_page || !rime->change_page(session, false)) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+bool HasCandidateInSlice(RimeApi* rime,
+                         RimeSessionId session,
+                         const char* input,
+                         int start_index,
+                         int count,
+                         const char* expected_candidate) {
+  rime->clear_composition(session);
+  for (const char* cursor = input; *cursor; ++cursor) {
+    if (!rime->process_key(session, *cursor, 0)) {
+      return false;
+    }
+  }
+
+  RimeCandidateListIterator iterator = {0};
+  if (!rime->candidate_list_from_index(session, &iterator, start_index)) {
+    return false;
+  }
+  bool found = false;
+  for (int index = 0; index < count && rime->candidate_list_next(&iterator);
+       ++index) {
+    if (std::strcmp(iterator.candidate.text, expected_candidate) == 0) {
+      found = true;
+      break;
+    }
+  }
+  rime->candidate_list_end(&iterator);
+  return found;
+}
+
 bool LearnCandidate(RimeApi* rime,
                     RimeSessionId session,
                     const char* input,
@@ -122,6 +184,14 @@ int main(int argc, char* argv[]) {
       !HasExpectedFirstCandidate(rime, session, "zhongguo", "中国") ||
       !HasExpectedFirstCandidate(rime, session, "shurufa", "输入法")) {
     std::fprintf(stderr, "unexpected first candidate\n");
+    rime->destroy_session(session);
+    rime->finalize();
+    return 1;
+  }
+  if (!HasCandidateOnLaterPage(rime, session, "yi", "熠") ||
+      !HasCandidateInSlice(rime, session, "yi", 48, 48, "熠")) {
+    std::fprintf(stderr,
+                 "candidate paging did not expose 熠 after the first page\n");
     rime->destroy_session(session);
     rime->finalize();
     return 1;
