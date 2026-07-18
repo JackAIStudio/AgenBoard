@@ -1,6 +1,6 @@
 # AgenBoard
 
-[![Build](https://github.com/mefuleu/AgenBoard/actions/workflows/build.yml/badge.svg)](https://github.com/mefuleu/AgenBoard/actions/workflows/build.yml)
+[![Build](https://github.com/JackAIStudio/AgenBoard/actions/workflows/build.yml/badge.svg)](https://github.com/JackAIStudio/AgenBoard/actions/workflows/build.yml)
 
 iPhone 语音转文字 MVP，支持在 Apple 本机识别与阿里云 Fun-ASR 录音文件识别之间切换。
 
