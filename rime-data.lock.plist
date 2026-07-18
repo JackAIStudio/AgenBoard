@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>schema_version</key>
+    <integer>1</integer>
+    <key>repository</key>
+    <string>mefuleu/AgenBoard</string>
+    <key>release_tag</key>
+    <string>rime-data-v1</string>
+    <key>asset_name</key>
+    <string>agenboard-rime-data-v1.zip</string>
+    <key>archive_sha256</key>
+    <string>729271904cf2cba6b290d741f16561cb22346538c7c5afb039b1f1c2f38bb8a9</string>
+    <key>source_asset_name</key>
+    <string>agenboard-rime-data-v1-source.zip</string>
+    <key>source_archive_sha256</key>
+    <string>e6a164a1b7ff3d40fa9469bfe347761dc6199d5ab7d590e7fea3fe7ca61b3d92</string>
+    <key>rime_ice_revision</key>
+    <string>07eca7256d0bae6948dcf3838e14910dbe3b00be</string>
+    <key>librime_version</key>
+    <string>1.16.1</string>
+</dict>
+</plist>

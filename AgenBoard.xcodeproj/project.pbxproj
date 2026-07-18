@@ -1,0 +1,621 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 63;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4A6E7A5D2C00100100AB0001 /* AgenBoardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A5C2C00100100AB0001 /* AgenBoardApp.swift */; };
+		4A6E7A5F2C00100100AB0001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A5E2C00100100AB0001 /* ContentView.swift */; };
+		4A6E7A612C00100100AB0001 /* SpeechRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A602C00100100AB0001 /* SpeechRecorder.swift */; };
+		4A6E7A632C00100100AB0001 /* PictureInPictureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A642C00100100AB0001 /* PictureInPictureCoordinator.swift */; };
+		4A6E7A652C00100100AB0001 /* SharedCommandStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */; };
+		4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */; };
+		4E4000012C40000100AB0001 /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */; };
+		4E4000022C40000100AB0001 /* HotwordLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000042C40000100AB0001 /* HotwordLibraryView.swift */; };
+		4E4000052C40000100AB0001 /* HotwordLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000062C40000100AB0001 /* HotwordLibrary.swift */; };
+		505000012C60000100AB0001 /* SpeechServiceConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */; };
+		505000022C60000100AB0001 /* AliyunSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */; };
+		505000032C60000100AB0001 /* SpeechServiceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */; };
+		4F5000012C50000100AB0001 /* RecognitionHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5000032C50000100AB0001 /* RecognitionHistory.swift */; };
+		4F5000022C50000100AB0001 /* RecognitionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */; };
+		4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000022C10000100AB0001 /* KeyboardViewController.swift */; };
+		4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000162C10000100AB0001 /* PinyinInputEngine.swift */; };
+		4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2000022C20000100AB0001 /* RimePinyinEngine.swift */; };
+		4B2000032C20000100AB0001 /* RimeData in Resources */ = {isa = PBXBuildFile; fileRef = 4B2000042C20000100AB0001 /* RimeData */; };
+		4B2000052C20000100AB0001 /* LibrimeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B2000062C20000100AB0001 /* LibrimeKit */; };
+		4B1000132C10000100AB0001 /* KeyboardHostTracker.m in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000122C10000100AB0001 /* KeyboardHostTracker.m */; };
+		4B1000152C10000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */; };
+		4B1000032C10000100AB0001 /* AgenBoardKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		515100012C71000100AB0001 /* QuickPhraseLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515100022C71000100AB0001 /* QuickPhraseLibrary.swift */; };
+		526000012C80000100AB0001 /* PortableData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526000032C80000100AB0001 /* PortableData.swift */; };
+		526000022C80000100AB0001 /* DataTransferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526000042C80000100AB0001 /* DataTransferView.swift */; };
+		526000052C80000100AB0001 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 526000062C80000100AB0001 /* ZIPFoundation */; };
+		537000012C90000100AB0001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 537000022C90000100AB0001 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4B1000052C10000100AB0001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4A6E7A482C00100100AB0001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B1000062C10000100AB0001;
+			remoteInfo = AgenBoardKeyboard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		4B1000072C10000100AB0001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4B1000032C10000100AB0001 /* AgenBoardKeyboard.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		4A6E7A502C00100100AB0001 /* AgenBoard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgenBoard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A6E7A5C2C00100100AB0001 /* AgenBoardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenBoardApp.swift; sourceTree = "<group>"; };
+		4A6E7A5E2C00100100AB0001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		4A6E7A602C00100100AB0001 /* SpeechRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecorder.swift; sourceTree = "<group>"; };
+		4A6E7A642C00100100AB0001 /* PictureInPictureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PictureInPictureCoordinator.swift; sourceTree = "<group>"; };
+		4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCommandStore.swift; sourceTree = "<group>"; };
+		4A6E7A682C00100100AB0001 /* AgenBoard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgenBoard.entitlements; sourceTree = "<group>"; };
+		4A6E7A622C00100100AB0001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
+		4E4000042C40000100AB0001 /* HotwordLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibraryView.swift; sourceTree = "<group>"; };
+		4E4000062C40000100AB0001 /* HotwordLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibrary.swift; sourceTree = "<group>"; };
+		505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceConfiguration.swift; sourceTree = "<group>"; };
+		505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AliyunSpeechTranscriber.swift; sourceTree = "<group>"; };
+		505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceSettingsView.swift; sourceTree = "<group>"; };
+		4F5000032C50000100AB0001 /* RecognitionHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionHistory.swift; sourceTree = "<group>"; };
+		4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionHistoryView.swift; sourceTree = "<group>"; };
+		4B1000022C10000100AB0001 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		4B1000162C10000100AB0001 /* PinyinInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinInputEngine.swift; sourceTree = "<group>"; };
+		4B2000022C20000100AB0001 /* RimePinyinEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimePinyinEngine.swift; sourceTree = "<group>"; };
+		4B2000042C20000100AB0001 /* RimeData */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeData; sourceTree = "<group>"; };
+		4B1000122C10000100AB0001 /* KeyboardHostTracker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KeyboardHostTracker.m; sourceTree = "<group>"; };
+		4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyKeyboardHostResolver.swift; sourceTree = "<group>"; };
+		4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AgenBoardKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B1000082C10000100AB0001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgenBoardKeyboard.entitlements; sourceTree = "<group>"; };
+		515100022C71000100AB0001 /* QuickPhraseLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPhraseLibrary.swift; sourceTree = "<group>"; };
+		526000032C80000100AB0001 /* PortableData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortableData.swift; sourceTree = "<group>"; };
+		526000042C80000100AB0001 /* DataTransferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTransferView.swift; sourceTree = "<group>"; };
+		537000022C90000100AB0001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4A6E7A4D2C00100100AB0001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				526000052C80000100AB0001 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B1000092C10000100AB0001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B2000052C20000100AB0001 /* LibrimeKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4A6E7A472C00100100AB0001 = {
+			isa = PBXGroup;
+			children = (
+				4A6E7A592C00100100AB0001 /* AgenBoard */,
+				4B10000A2C10000100AB0001 /* AgenBoardKeyboard */,
+				4A6E7A512C00100100AB0001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		4A6E7A512C00100100AB0001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4A6E7A502C00100100AB0001 /* AgenBoard.app */,
+				4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4A6E7A592C00100100AB0001 /* AgenBoard */ = {
+			isa = PBXGroup;
+			children = (
+				537000022C90000100AB0001 /* Assets.xcassets */,
+				4A6E7A5C2C00100100AB0001 /* AgenBoardApp.swift */,
+				4A6E7A5E2C00100100AB0001 /* ContentView.swift */,
+				4A6E7A602C00100100AB0001 /* SpeechRecorder.swift */,
+				4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */,
+				505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */,
+				505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */,
+				505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */,
+				4F5000032C50000100AB0001 /* RecognitionHistory.swift */,
+				4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */,
+				4A6E7A642C00100100AB0001 /* PictureInPictureCoordinator.swift */,
+				4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */,
+				4E4000062C40000100AB0001 /* HotwordLibrary.swift */,
+				4E4000042C40000100AB0001 /* HotwordLibraryView.swift */,
+				515100022C71000100AB0001 /* QuickPhraseLibrary.swift */,
+				526000032C80000100AB0001 /* PortableData.swift */,
+				526000042C80000100AB0001 /* DataTransferView.swift */,
+				4A6E7A682C00100100AB0001 /* AgenBoard.entitlements */,
+				4A6E7A622C00100100AB0001 /* Info.plist */,
+			);
+			path = AgenBoard;
+			sourceTree = "<group>";
+		};
+		4B10000A2C10000100AB0001 /* AgenBoardKeyboard */ = {
+			isa = PBXGroup;
+			children = (
+				4B1000022C10000100AB0001 /* KeyboardViewController.swift */,
+				4B1000162C10000100AB0001 /* PinyinInputEngine.swift */,
+				4B2000022C20000100AB0001 /* RimePinyinEngine.swift */,
+				4B2000042C20000100AB0001 /* RimeData */,
+				4B1000122C10000100AB0001 /* KeyboardHostTracker.m */,
+				4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */,
+				4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */,
+				4B1000082C10000100AB0001 /* Info.plist */,
+			);
+			path = AgenBoardKeyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4A6E7A4F2C00100100AB0001 /* AgenBoard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A6E7A572C00100100AB0001 /* Build configuration list for PBXNativeTarget "AgenBoard" */;
+			buildPhases = (
+				4A6E7A4C2C00100100AB0001 /* Sources */,
+				4A6E7A4D2C00100100AB0001 /* Frameworks */,
+				4A6E7A4E2C00100100AB0001 /* Resources */,
+				4B1000072C10000100AB0001 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4B10000B2C10000100AB0001 /* PBXTargetDependency */,
+			);
+			name = AgenBoard;
+			packageProductDependencies = (
+				526000062C80000100AB0001 /* ZIPFoundation */,
+			);
+			productName = AgenBoard;
+			productReference = 4A6E7A502C00100100AB0001 /* AgenBoard.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4B1000062C10000100AB0001 /* AgenBoardKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B10000C2C10000100AB0001 /* Build configuration list for PBXNativeTarget "AgenBoardKeyboard" */;
+			buildPhases = (
+				4B10000D2C10000100AB0001 /* Sources */,
+				4B1000092C10000100AB0001 /* Frameworks */,
+				4B10000E2C10000100AB0001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AgenBoardKeyboard;
+			packageProductDependencies = (
+				4B2000062C20000100AB0001 /* LibrimeKit */,
+			);
+			productName = AgenBoardKeyboard;
+			productReference = 4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4A6E7A482C00100100AB0001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					4A6E7A4F2C00100100AB0001 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					4B1000062C10000100AB0001 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+				};
+			};
+			buildConfigurationList = 4A6E7A4B2C00100100AB0001 /* Build configuration list for PBXProject "AgenBoard" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = zh_CN;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				zh_CN,
+				en,
+				Base,
+			);
+			mainGroup = 4A6E7A472C00100100AB0001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */,
+				526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			productRefGroup = 4A6E7A512C00100100AB0001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4A6E7A4F2C00100100AB0001 /* AgenBoard */,
+				4B1000062C10000100AB0001 /* AgenBoardKeyboard */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4A6E7A4E2C00100100AB0001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				537000012C90000100AB0001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B10000E2C10000100AB0001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B2000032C20000100AB0001 /* RimeData in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4A6E7A4C2C00100100AB0001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A6E7A5D2C00100100AB0001 /* AgenBoardApp.swift in Sources */,
+				4A6E7A5F2C00100100AB0001 /* ContentView.swift in Sources */,
+				4A6E7A612C00100100AB0001 /* SpeechRecorder.swift in Sources */,
+				4E4000012C40000100AB0001 /* AppleSpeechTranscriber.swift in Sources */,
+				505000012C60000100AB0001 /* SpeechServiceConfiguration.swift in Sources */,
+				505000022C60000100AB0001 /* AliyunSpeechTranscriber.swift in Sources */,
+				505000032C60000100AB0001 /* SpeechServiceSettingsView.swift in Sources */,
+				4F5000012C50000100AB0001 /* RecognitionHistory.swift in Sources */,
+				4F5000022C50000100AB0001 /* RecognitionHistoryView.swift in Sources */,
+				4A6E7A632C00100100AB0001 /* PictureInPictureCoordinator.swift in Sources */,
+				4A6E7A652C00100100AB0001 /* SharedCommandStore.swift in Sources */,
+				4E4000052C40000100AB0001 /* HotwordLibrary.swift in Sources */,
+				4E4000022C40000100AB0001 /* HotwordLibraryView.swift in Sources */,
+				515100012C71000100AB0001 /* QuickPhraseLibrary.swift in Sources */,
+				526000012C80000100AB0001 /* PortableData.swift in Sources */,
+				526000022C80000100AB0001 /* DataTransferView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B10000D2C10000100AB0001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */,
+				4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */,
+				4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */,
+				4B1000132C10000100AB0001 /* KeyboardHostTracker.m in Sources */,
+				4B1000152C10000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */,
+				4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4B10000B2C10000100AB0001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B1000062C10000100AB0001 /* AgenBoardKeyboard */;
+			targetProxy = 4B1000052C10000100AB0001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zhanggenlove/LibrimeKit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.0;
+			};
+		};
+		526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4B2000062C20000100AB0001 /* LibrimeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */;
+			productName = LibrimeKit;
+		};
+		526000062C80000100AB0001 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4A6E7A532C00100100AB0001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		4A6E7A542C00100100AB0001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		4A6E7A552C00100100AB0001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = AgenBoard/AgenBoard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AgenBoard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		4A6E7A562C00100100AB0001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = AgenBoard/AgenBoard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AgenBoard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		4B10000F2C10000100AB0001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = AgenBoardKeyboard/AgenBoardKeyboard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AgenBoardKeyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard.keyboard;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		4B1000102C10000100AB0001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = AgenBoardKeyboard/AgenBoardKeyboard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AgenBoardKeyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard.keyboard;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4A6E7A4B2C00100100AB0001 /* Build configuration list for PBXProject "AgenBoard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A6E7A532C00100100AB0001 /* Debug */,
+				4A6E7A542C00100100AB0001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A6E7A572C00100100AB0001 /* Build configuration list for PBXNativeTarget "AgenBoard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A6E7A552C00100100AB0001 /* Debug */,
+				4A6E7A562C00100100AB0001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4B10000C2C10000100AB0001 /* Build configuration list for PBXNativeTarget "AgenBoardKeyboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B10000F2C10000100AB0001 /* Debug */,
+				4B1000102C10000100AB0001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 4A6E7A482C00100100AB0001 /* Project object */;
+}

@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific data
+xcuserdata/
+*.xcuserstate
+
+# Xcode build products
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Generated Rime data fetched from GitHub Releases
+/AgenBoardKeyboard/RimeData/Prebuilt/

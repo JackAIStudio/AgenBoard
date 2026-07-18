@@ -1,0 +1,14 @@
+config_version: "1.0"
+
+schema_list:
+  - schema: agenboard_pinyin
+
+menu:
+  page_size: 48
+
+switcher:
+  caption: 方案选单
+  hotkeys:
+    - Control+grave
+  save_options:
+    - ascii_mode
