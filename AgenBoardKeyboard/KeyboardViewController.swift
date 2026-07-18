@@ -115,6 +115,7 @@ final class KeyboardViewController: UIInputViewController,
     private var insertionMessageUntil: TimeInterval = 0
     private var appLaunchRequestedAt: TimeInterval?
     private var appOpenVerificationTask: Task<Void, Never>?
+    private var liveRecordingStartFallbackTask: Task<Void, Never>?
     private var hostCaptureTask: Task<Void, Never>?
     private var launchFailureMessage: String?
     private var launchFailureMessageUntil: TimeInterval = 0
@@ -157,6 +158,8 @@ final class KeyboardViewController: UIInputViewController,
         stopDeleting()
         hostCaptureTask?.cancel()
         hostCaptureTask = nil
+        liveRecordingStartFallbackTask?.cancel()
+        liveRecordingStartFallbackTask = nil
         stopSnapshotTimer()
     }
 
@@ -1560,6 +1563,10 @@ final class KeyboardViewController: UIInputViewController,
     }
 
     @objc private func toggleRecording() {
+        guard liveRecordingStartFallbackTask == nil else {
+            return
+        }
+
         launchFailureMessage = nil
         launchFailureMessageUntil = 0
         let snapshot = SharedCommandStore.latestRecordingSnapshot()
@@ -1584,10 +1591,20 @@ final class KeyboardViewController: UIInputViewController,
         lastHandledRecognitionResultID = SharedCommandStore.latestRecognitionResult()?.id
             ?? lastHandledRecognitionResultID
 
+        if isAppResponsive && snapshot.isTranscribing {
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "responsive_transcription_request_ignored",
+                detail: diagnosticState
+            )
+            statusLabel.text = "正在处理上一段语音..."
+            return
+        }
+
         if isAppResponsive {
-            // A live host app publishes a heartbeat every 250 ms. This path must
-            // remain App-Group-only: even resolving the keyboard host touches
-            // PlugInKit/LaunchServices and can activate the containing app.
+            // Prefer the invisible App-Group path while the containing app is
+            // alive. A previously activated recording session can usually start
+            // again in the background; if it cannot, verification below falls
+            // back to foreground launch instead of making every tap switch apps.
             if let request = SharedCommandStore.requestRecordingToggle(
                 shouldReturnToPreviousInterface: false
             ) {
@@ -1602,6 +1619,9 @@ final class KeyboardViewController: UIInputViewController,
                 statusLabel.text = snapshot.isRecording
                     ? "正在停止录音..."
                     : "已发送录音请求"
+                if !snapshot.isRecording {
+                    scheduleLiveRecordingStartFallback(for: request)
+                }
             } else {
                 SharedCommandStore.recordKeyboardDiagnostic(
                     "responsive_app_group_request_failed",
@@ -1761,6 +1781,7 @@ final class KeyboardViewController: UIInputViewController,
         let shouldKeepInsertionMessage = now < insertionMessageUntil
         let shouldShowLaunchFailure = now < launchFailureMessageUntil
         let isLaunchingApp = appLaunchRequestedAt.map { now - $0 < 8 } ?? false
+        let isAwaitingLiveRecordingStart = liveRecordingStartFallbackTask != nil
         let snapshotError = isFresh ? voiceErrorMessage(from: snapshot.status) : nil
 
         if isFresh {
@@ -1770,7 +1791,8 @@ final class KeyboardViewController: UIInputViewController,
         updateRecordingButton(
             isRecording: isActive,
             isTranscribing: isTranscribing,
-            isLaunchingApp: isLaunchingApp && !isFresh,
+            isLaunchingApp: (isLaunchingApp && !isFresh)
+                || isAwaitingLiveRecordingStart,
             audioLevel: isActive ? snapshot.audioLevel : 0
         )
 
@@ -1785,7 +1807,7 @@ final class KeyboardViewController: UIInputViewController,
         } else if isTranscribing {
             statusLabel.textColor = .secondaryLabel
             statusLabel.text = nil
-        } else if isLaunchingApp {
+        } else if isLaunchingApp || isAwaitingLiveRecordingStart {
             statusLabel.text = nil
             statusLabel.textColor = .secondaryLabel
         } else if let snapshotError {
@@ -2049,6 +2071,80 @@ final class KeyboardViewController: UIInputViewController,
             if !isAppResponsive {
                 self.showLaunchFailure("AgenBoard 未能打开，请再点一次")
             }
+        }
+    }
+
+    private func scheduleLiveRecordingStartFallback(
+        for request: SharedRecordingToggleRequest
+    ) {
+        liveRecordingStartFallbackTask?.cancel()
+        liveRecordingStartFallbackTask = Task { @MainActor [weak self] in
+            for _ in 0..<12 {
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    return
+                }
+
+                guard let self else {
+                    return
+                }
+
+                guard SharedCommandStore.latestRecordingToggleRequest()?.id
+                        == request.id else {
+                    self.liveRecordingStartFallbackTask = nil
+                    return
+                }
+
+                let snapshot = SharedCommandStore.latestRecordingSnapshot()
+                let isFresh = Date().timeIntervalSince1970 - snapshot.updatedAt < 1.5
+                if isFresh && snapshot.isRecording {
+                    RecordingLaunchMetrics.mark(
+                        "keyboard_live_recording_start_succeeded",
+                        request: request
+                    )
+                    self.liveRecordingStartFallbackTask = nil
+                    return
+                }
+            }
+
+            guard let self else {
+                return
+            }
+
+            let snapshot = SharedCommandStore.latestRecordingSnapshot()
+            if Date().timeIntervalSince1970 - snapshot.updatedAt < 1.5,
+               snapshot.isRecording {
+                self.liveRecordingStartFallbackTask = nil
+                return
+            }
+
+            guard SharedCommandStore.latestRecordingToggleRequest()?.id
+                    == request.id else {
+                self.liveRecordingStartFallbackTask = nil
+                return
+            }
+
+            self.liveRecordingStartFallbackTask = nil
+            guard let fallbackRequest = SharedCommandStore.requestRecordingToggle(
+                shouldReturnToPreviousInterface: true
+            ) else {
+                self.showLaunchFailure("后台录音不可用，且共享通道无法创建唤起请求")
+                return
+            }
+
+            RecordingLaunchMetrics.mark(
+                "keyboard_live_recording_start_fallback",
+                request: fallbackRequest,
+                detail: "failed_request=\(request.id)"
+            )
+            self.appLaunchRequestedAt = fallbackRequest.requestedAt
+            self.statusLabel.text = "后台录音不可用，正在打开 AgenBoard..."
+            self.openContainingApp(
+                self.recordingURL(for: fallbackRequest),
+                reason: "live_recording_start_failed",
+                request: fallbackRequest
+            )
         }
     }
 

@@ -3,6 +3,7 @@ import UIKit
 import ObjectiveC.runtime
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recorder: SpeechRecorder
     @StateObject private var historyStore: RecognitionHistoryStore
     @StateObject private var pip = PictureInPictureCoordinator()
@@ -19,6 +20,7 @@ struct ContentView: View {
     ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
     @State private var aliyunConfigured = false
     @State private var handledRecordingRequestIDs: Set<String> = []
+    @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
     @State private var shouldReturnToPreviousInterface = false
     @State private var isReturnToPreviousInterfaceScheduled = false
@@ -480,6 +482,12 @@ struct ContentView: View {
         .onOpenURL { url in
             handleIncomingURL(url)
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else {
+                return
+            }
+            handleLatestSharedRecordingRequest()
+        }
         .task {
             await observeKeyboardRecordingRequests()
         }
@@ -659,6 +667,32 @@ struct ContentView: View {
         guard !handledRecordingRequestIDs.contains(request.id),
               request.id != SharedCommandStore.latestHandledRecordingToggleRequestID() else {
             return
+        }
+
+        // A live App-Group request intentionally gets one background start
+        // attempt so an already-established audio session can be reused without
+        // switching apps. Cold/fallback requests wait until their URL launch has
+        // made the scene active, avoiding a race with foreground activation.
+        let requiresForeground = !recorder.isRecording
+            && request.shouldReturnToPreviousInterface
+        guard !requiresForeground || scenePhase == .active else {
+            if deferredRecordingRequestID != request.id {
+                deferredRecordingRequestID = request.id
+                RecordingLaunchMetrics.mark(
+                    "main_recording_request_deferred_until_active",
+                    request: request,
+                    detail: "scene=\(String(describing: scenePhase))"
+                )
+            }
+            return
+        }
+
+        if deferredRecordingRequestID == request.id {
+            deferredRecordingRequestID = nil
+            RecordingLaunchMetrics.mark(
+                "main_recording_request_resumed_in_foreground",
+                request: request
+            )
         }
 
         if request.shouldReturnToPreviousInterface {

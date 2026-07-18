@@ -228,10 +228,12 @@ final class SpeechRecorder: ObservableObject {
                 request: request
             )
         } catch {
+            let nsError = error as NSError
+            status = "录音启动失败"
             RecordingLaunchMetrics.mark(
                 "main_recorder_start_failed",
                 request: request,
-                detail: error.localizedDescription
+                detail: "domain=\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription)"
             )
             SharedCommandStore.cancelKeyboardAutoInsert()
             showError("无法开始录音：\(error.localizedDescription)")
