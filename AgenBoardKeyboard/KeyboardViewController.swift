@@ -74,7 +74,7 @@ final class KeyboardViewController: UIInputViewController,
     private let keyboardModuleStack = UIStackView()
     private var moduleButtons: [ContentModule: UIButton] = [:]
     private var selectedContentModule = ContentModule.voice
-    private var isQuickPhraseModuleVisible = true
+    private var isQuickPhraseModuleVisible = false
     private let statusLabel = UILabel()
     private var recordingButton: UIButton?
     private var recordingButtonWidthConstraint: NSLayoutConstraint?
