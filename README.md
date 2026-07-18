@@ -1,6 +1,17 @@
 # AgenBoard
 
+[![Build](https://github.com/mefuleu/AgenBoard/actions/workflows/build.yml/badge.svg)](https://github.com/mefuleu/AgenBoard/actions/workflows/build.yml)
+
 iPhone 语音转文字 MVP，支持在 Apple 本机识别与阿里云 Fun-ASR 录音文件识别之间切换。
+
+## 项目状态
+
+这是一个面向开发者和个人自用场景的实验性项目，目前发布源代码，不提供已签名 App 或 App Store 版本。键盘扩展为实现从第三方键盘唤起主 App 和识别当前宿主，使用了运行时发现的非公开系统类、选择器与 KVC 键；这些实现可能随 iOS 更新失效，也可能不符合 App Store 审核要求。
+
+- 隐私与数据处理见 [`PRIVACY.md`](PRIVACY.md)。
+- 安全问题请按 [`SECURITY.md`](SECURITY.md) 私密报告。
+- 贡献方式见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+- 第三方依赖与二进制分发前的合规事项见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ## 当前版本
 
@@ -74,7 +85,7 @@ API Key 只保存在本机钥匙串，不会写入项目文件或 `UserDefaults`
 
 ### 环境要求
 
-- macOS 与 Xcode 26.6 或更高版本
+- macOS 与 Xcode 26.4 或更高版本
 - Apple Silicon Mac（LibrimeKit 0.1.0 的模拟器二进制仅包含 arm64）
 - iOS 17.0 或更高版本
 
@@ -97,3 +108,7 @@ xcodebuild \
 
 如需安装到真机，请在 Xcode 中为主 App 与键盘扩展选择自己的开发团队，
 并将主 App Bundle ID、键盘扩展 Bundle ID 和 App Group 改为自己账号下的唯一值。
+
+## 许可证
+
+AgenBoard 以 [GPL-3.0-only](LICENSE) 开源。第三方代码、库和词典仍适用其各自许可证，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`LICENSES`](LICENSES/)。

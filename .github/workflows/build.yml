@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    name: iOS Simulator
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate metadata and scripts
+        run: |
+          bash -n scripts/*.sh
+          plutil -lint AgenBoard/PrivacyInfo.xcprivacy
+          plutil -lint AgenBoardKeyboard/PrivacyInfo.xcprivacy
+          plutil -lint rime-data.lock.plist
+
+      - name: Fetch verified Rime data
+        run: ./scripts/fetch-rime-data.sh
+
+      - name: Build
+        run: xcodebuild -project AgenBoard.xcodeproj -scheme AgenBoard -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
