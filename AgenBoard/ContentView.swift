@@ -925,7 +925,8 @@ private enum PreviousInterfaceRestorer {
     private static func restoreUsingHostApplication(
         _ bundleIdentifier: String
     ) -> Bool {
-        guard !bundleIdentifier.hasPrefix("dev.local.agenboard") else {
+        guard bundleIdentifier != SharedCommandStore.appBundleIdentifier,
+              bundleIdentifier != Bundle.main.bundleIdentifier else {
             return false
         }
 

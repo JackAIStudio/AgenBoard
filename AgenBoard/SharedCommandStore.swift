@@ -71,7 +71,14 @@ struct SharedQuickPhrase: Codable, Identifiable, Equatable, Sendable {
 }
 
 enum SharedCommandStore {
-    static let appGroupIdentifier = "group.dev.local.agenboard"
+    static let appBundleIdentifier = configuredIdentifier(
+        forInfoDictionaryKey: "AgenBoardAppBundleIdentifier",
+        fallback: "dev.local.agenboard"
+    )
+    static let appGroupIdentifier = configuredIdentifier(
+        forInfoDictionaryKey: "AgenBoardAppGroupIdentifier",
+        fallback: "group.dev.local.agenboard"
+    )
     static let recordingToggleDarwinNotificationName =
         "dev.local.agenboard.recording-toggle"
     static let maximumKeyboardQuickPhraseCount = 6
@@ -128,6 +135,23 @@ enum SharedCommandStore {
     private static let keyboardHapticsEnabledKey = "keyboardHapticsEnabled"
     private static let keyboardSelectedContentModuleKey =
         "keyboardSelectedContentModule"
+
+    private static func configuredIdentifier(
+        forInfoDictionaryKey key: String,
+        fallback: String
+    ) -> String {
+        guard let value = Bundle.main.object(
+            forInfoDictionaryKey: key
+        ) as? String else {
+            return fallback
+        }
+
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, !normalized.contains("$(") else {
+            return fallback
+        }
+        return normalized
+    }
 
     static func keyboardSelectedContentModuleRawValue() -> Int? {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier),

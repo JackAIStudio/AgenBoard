@@ -76,7 +76,7 @@ API Key 只保存在本机钥匙串，不会写入项目文件或 `UserDefaults`
 - 核心使用固定版本的 LibrimeKit `0.1.0`（librime `1.16.1`）。
 - 基础词库来自雾凇拼音提交 `07eca7256d0bae6948dcf3838e14910dbe3b00be`。
 - 大型静态词典在构建前从固定的 GitHub Release 下载并校验，最终仍会随键盘离线打包，运行时不会联网下载或现场部署词库。
-- 用户词典存放在 `group.dev.local.agenboard/RimeUserData`，升级应用不会清空。
+- 用户词典存放在所配置 App Group 的 `RimeUserData` 目录，升级应用不会清空。
 - 如果 Rime 资源损坏或初始化失败，旧的轻量拼音引擎仍会作为故障回退。
 
 普通开发者运行 `scripts/fetch-rime-data.sh` 获取锁定版本的预编译数据。维护者更新词库时运行 `scripts/build-rime-data.sh`，脚本会下载固定版本、生成预编译数据，并自动检查常用候选和用户学习；随后可用 `scripts/package-rime-data-release.sh` 制作发布资源。
@@ -106,8 +106,9 @@ xcodebuild \
   build
 ```
 
-如需安装到真机，请在 Xcode 中为主 App 与键盘扩展选择自己的开发团队，
-并将主 App Bundle ID、键盘扩展 Bundle ID 和 App Group 改为自己账号下的唯一值。
+如需安装到真机，请在 Xcode 中打开项目，进入 “Signing & Capabilities”，分别为 `AgenBoard` 和 `AgenBoardKeyboard` 两个 target 选择自己的 Team。项目会自动根据 Team 生成唯一的主 App Bundle ID、键盘扩展 Bundle ID 和 App Group，无需手动填写其他签名标识符。
+
+如需直接调试键盘扩展，请选择 `AgenBoardKeyboard` scheme。该 scheme 默认使用系统 Safari 作为调试宿主；如果 Xcode 询问要运行哪个 App，请选择 Safari。安装并按上文启用 AgenBoard 键盘后，在 Safari 文本框中切换到 AgenBoard 即可触发扩展断点。
 
 ## 许可证
 

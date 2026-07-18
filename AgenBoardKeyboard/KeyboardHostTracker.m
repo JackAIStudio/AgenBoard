@@ -37,8 +37,6 @@ static NSString *const ABKeyboardChangedSelectorName =
     @"queue_keyboardChanged:onComplete:";
 static NSString *const ABSourceBundleIdentifierKey =
     @"_sourceBundleIdentifier";
-static NSString *const ABAppGroupIdentifier =
-    @"group.dev.local.agenboard";
 static NSString *const ABStoredHostBundleIdentifierKey =
     @"keyboardHostBundleIdentifier";
 static NSString *const ABStoredHostCapturedAtKey =
@@ -47,9 +45,42 @@ static NSString *const ABStoredHostCapturedAtKey =
 static IMP ABOriginalKeyboardChangedImplementation = NULL;
 static BOOL ABHostTrackingInstalled = NO;
 
+static NSString *ABConfiguredIdentifier(
+    NSString *key,
+    NSString *fallback
+) {
+    id value = NSBundle.mainBundle.infoDictionary[key];
+    if (![value isKindOfClass:NSString.class]) {
+        return fallback;
+    }
+
+    NSString *identifier = [(NSString *)value
+        stringByTrimmingCharactersInSet:
+            NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (identifier.length == 0 ||
+        [identifier containsString:@"$("]) {
+        return fallback;
+    }
+    return identifier;
+}
+
+static NSString *ABAppGroupIdentifier(void) {
+    return ABConfiguredIdentifier(
+        @"AgenBoardAppGroupIdentifier",
+        @"group.dev.local.agenboard"
+    );
+}
+
+static NSString *ABAppBundleIdentifier(void) {
+    return ABConfiguredIdentifier(
+        @"AgenBoardAppBundleIdentifier",
+        @"dev.local.agenboard"
+    );
+}
+
 static void ABStoreDiagnostic(NSString *key, id value) {
     NSUserDefaults *defaults =
-        [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier];
+        [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier()];
     [defaults setObject:value forKey:key];
 }
 
@@ -61,7 +92,7 @@ static BOOL ABIsUsableHostBundleIdentifier(NSString *bundleIdentifier) {
 
     NSString *extensionBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
     if ([bundleIdentifier isEqualToString:extensionBundleIdentifier] ||
-        [bundleIdentifier hasPrefix:@"dev.local.agenboard"]) {
+        [bundleIdentifier isEqualToString:ABAppBundleIdentifier()]) {
         return NO;
     }
 
@@ -74,7 +105,7 @@ static void ABStoreHostBundleIdentifier(NSString *bundleIdentifier) {
     }
 
     NSUserDefaults *defaults =
-        [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier];
+        [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier()];
     [defaults setObject:bundleIdentifier
                  forKey:ABStoredHostBundleIdentifierKey];
     [defaults setDouble:NSDate.date.timeIntervalSince1970

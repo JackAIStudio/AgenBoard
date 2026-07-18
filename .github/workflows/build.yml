@@ -27,6 +27,7 @@ jobs:
       - name: Validate metadata and scripts
         run: |
           bash -n scripts/*.sh
+          ./scripts/check-public-config.sh
           plutil -lint AgenBoard/PrivacyInfo.xcprivacy
           plutil -lint AgenBoardKeyboard/PrivacyInfo.xcprivacy
           plutil -lint rime-data.lock.plist
