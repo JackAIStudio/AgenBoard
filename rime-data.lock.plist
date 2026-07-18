@@ -5,7 +5,7 @@
     <key>schema_version</key>
     <integer>1</integer>
     <key>repository</key>
-    <string>mefuleu/AgenBoard</string>
+    <string>JackAIStudio/AgenBoard</string>
     <key>release_tag</key>
     <string>rime-data-v1</string>
     <key>asset_name</key>

@@ -6,7 +6,7 @@
 
 ## 报告漏洞
 
-请使用 GitHub 的[私密安全公告](https://github.com/mefuleu/AgenBoard/security/advisories/new)报告漏洞，不要先创建公开 Issue。报告中请包含受影响版本、复现条件、潜在影响，以及在安全前提下可提供的日志或最小示例。
+请使用 GitHub 的[私密安全公告](https://github.com/JackAIStudio/AgenBoard/security/advisories/new)报告漏洞，不要先创建公开 Issue。报告中请包含受影响版本、复现条件、潜在影响，以及在安全前提下可提供的日志或最小示例。
 
 维护者会尽量在 7 天内确认收到报告，并在完成影响评估后协调修复和公开时间。不要在报告中提交真实 API Key、用户录音、转写内容或其他个人数据。
 
