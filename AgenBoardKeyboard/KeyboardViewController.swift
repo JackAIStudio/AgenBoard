@@ -429,7 +429,7 @@ final class KeyboardViewController: UIInputViewController,
         self.recordingLevelView = recordingLevelView
 
         let returnButton = makeVoiceUtilityButton(
-            title: "回车键",
+            systemImage: "return",
             accessibilityLabel: "回车键",
             action: #selector(insertReturn),
             width: 112
@@ -442,7 +442,7 @@ final class KeyboardViewController: UIInputViewController,
             style: .secondary
         )
         let spaceButton = makeVoiceUtilityButton(
-            title: "空格",
+            systemImage: "space",
             accessibilityLabel: "空格",
             action: #selector(insertSpace),
             width: 112
@@ -466,18 +466,26 @@ final class KeyboardViewController: UIInputViewController,
 
         NSLayoutConstraint.activate([
             canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 184),
-            statusLabel.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 2),
+            statusLabel.topAnchor.constraint(equalTo: recordingButton.bottomAnchor, constant: 2),
             statusLabel.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
             statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: canvas.leadingAnchor, constant: 58),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: canvas.trailingAnchor, constant: -58),
 
             recordingButton.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            recordingButton.centerYAnchor.constraint(equalTo: canvas.topAnchor, constant: 76),
+            recordingButton.centerYAnchor.constraint(equalTo: canvas.topAnchor, constant: 36),
             widthConstraint,
             heightConstraint,
 
             textInputButtonRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            textInputButtonRow.bottomAnchor.constraint(equalTo: canvas.bottomAnchor, constant: -2),
+            textInputButtonRow.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 132),
+            textInputButtonRow.topAnchor.constraint(
+                greaterThanOrEqualTo: statusLabel.bottomAnchor,
+                constant: 2
+            ),
+            textInputButtonRow.bottomAnchor.constraint(
+                lessThanOrEqualTo: canvas.bottomAnchor,
+                constant: -10
+            ),
 
             deleteButton.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -4),
             deleteButton.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 36),
@@ -2110,8 +2118,14 @@ final class KeyboardViewController: UIInputViewController,
 
         cursorTrackingDefaultConfiguration = button.configuration
         var configuration = button.configuration
-        configuration?.title = "拖动以移动光标"
-        configuration?.image = UIImage(systemName: "arrow.left.and.right")
+        configuration?.title = nil
+        configuration?.image = UIImage(
+            systemName: "arrow.up.and.down.and.arrow.left.and.right"
+        )
+        configuration?.preferredSymbolConfigurationForImage = .init(
+            pointSize: 20,
+            weight: .medium
+        )
         configuration?.baseBackgroundColor = .systemGray4
         button.configuration = configuration
 
