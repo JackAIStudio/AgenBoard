@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ObjectiveC.runtime
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -22,6 +23,7 @@ struct ContentView: View {
     @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
     @State private var showsManualReturnGuidance = false
+    @State private var manualReturnNeedsSystemFallback = false
     @State private var showsQuickPhraseLibrary = false
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
@@ -35,6 +37,12 @@ struct ContentView: View {
 
     private var selectedProviderIsReady: Bool {
         selectedProvider == .apple || aliyunConfigured
+    }
+
+    private var canReturnToPreviousInterface: Bool {
+        recorder.isRecording
+            && (pip.isPictureInPictureActive
+                || pip.isPreparedForBackgroundTransition)
     }
 
     init() {
@@ -58,21 +66,44 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
 
                         if showsManualReturnGuidance {
-                            Label {
-                                Text(
-                                    recorder.isRecording
-                                        ? "录音已启动，请点屏幕左上角的系统返回入口，回到刚才的 App。"
-                                        : "正在准备录音；启动后请点屏幕左上角的系统返回入口。"
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label(
+                                    recorder.isRecording ? "录音已启动" : "正在准备录音",
+                                    systemImage: "waveform.and.mic"
                                 )
-                            } icon: {
-                                Image(systemName: "arrow.backward.circle.fill")
+                                .font(.headline)
+
+                                Text(
+                                    manualReturnNeedsSystemFallback
+                                        ? "系统没有提供可调用的返回目标，请点屏幕左上角的小字返回；若来自主屏幕或 Spotlight，请使用系统手势。"
+                                        : canReturnToPreviousInterface
+                                            ? "点击下面的大按钮回到刚才的 App，录音会继续。"
+                                            : "录音和画中画准备完成后，返回按钮会自动可用。"
+                                )
+                                .font(.subheadline)
+
+                                Button {
+                                    returnToPreviousInterface()
+                                } label: {
+                                    Label(
+                                        "返回刚才的 App",
+                                        systemImage: "arrowshape.turn.up.backward.fill"
+                                    )
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 50)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!canReturnToPreviousInterface)
                             }
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(.blue)
-                            .padding(12)
+                            .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.blue.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .background(
+                                manualReturnNeedsSystemFallback
+                                    ? Color.orange.opacity(0.12)
+                                    : Color.blue.opacity(0.1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                     }
 
@@ -395,13 +426,12 @@ struct ContentView: View {
                             .buttonStyle(.bordered)
                         }
 
-                        PictureInPictureSourceView(coordinator: pip)
-                            .aspectRatio(16 / 9, contentMode: .fit)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(.quaternary)
-                            }
+                        Label(
+                            "来源视图已固定在窗口层，无需滚动到这里",
+                            systemImage: "pip"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                     .padding(14)
                     .background(.thinMaterial)
@@ -457,6 +487,15 @@ struct ContentView: View {
                 QuickPhraseLibraryView(store: quickPhraseStore)
             }
         }
+        .overlay(alignment: .topLeading) {
+            // AVKit requires a stable source view in the active window. Keeping
+            // it outside the ScrollView prevents PiP availability from depending
+            // on whether the old preview card has been scrolled onscreen.
+            PictureInPictureSourceView(coordinator: pip)
+                .frame(width: 44, height: 44)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .alert("AgenBoard", isPresented: $recorder.showsError) {
             Button("好") {}
         } message: {
@@ -477,6 +516,7 @@ struct ContentView: View {
                 // Ending PiP with the recording removes that system-owned tab.
                 pip.stop()
                 showsManualReturnGuidance = false
+                manualReturnNeedsSystemFallback = false
             }
         }
         .onChange(of: recorder.audioLevel) { _, level in
@@ -494,10 +534,21 @@ struct ContentView: View {
             handleIncomingURL(url)
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else {
+            if phase == .active {
+                handleLatestSharedRecordingRequest()
                 return
             }
-            handleLatestSharedRecordingRequest()
+
+            guard recorder.isRecording,
+                  phase == .inactive || phase == .background else {
+                return
+            }
+            RecordingLaunchMetrics.mark(
+                "main_background_transition_pip_requested",
+                request: activeLaunchRequest,
+                detail: "scene=\(String(describing: phase))"
+            )
+            pip.startForBackgroundTransition()
         }
         .task {
             await observeKeyboardRecordingRequests()
@@ -544,6 +595,7 @@ struct ContentView: View {
 
         if requiresManualReturn(from: url) {
             showsManualReturnGuidance = true
+            manualReturnNeedsSystemFallback = false
         }
 
         if let request = incomingRequest {
@@ -573,6 +625,7 @@ struct ContentView: View {
                 request: activeLaunchRequest
             )
             showsManualReturnGuidance = false
+            manualReturnNeedsSystemFallback = false
             activeLaunchRequest = nil
             showsQuickPhraseLibrary = false
         }
@@ -691,6 +744,7 @@ struct ContentView: View {
 
         if request.requiresForegroundRoundTrip {
             showsManualReturnGuidance = true
+            manualReturnNeedsSystemFallback = false
         }
 
         activeLaunchRequest = request
@@ -708,6 +762,32 @@ struct ContentView: View {
             pip.start()
         }
         recorder.toggleRecording(request: request)
+    }
+
+    private func returnToPreviousInterface() {
+        guard canReturnToPreviousInterface else {
+            return
+        }
+
+        RecordingLaunchMetrics.mark(
+            "main_manual_return_button_tapped",
+            request: activeLaunchRequest
+        )
+        pip.startForBackgroundTransition()
+        let restored = SystemNavigationReturnAction.perform()
+        RecordingLaunchMetrics.mark(
+            restored ? "main_manual_return_succeeded" : "main_manual_return_failed",
+            request: activeLaunchRequest
+        )
+
+        if restored {
+            showsManualReturnGuidance = false
+            manualReturnNeedsSystemFallback = false
+        } else {
+            manualReturnNeedsSystemFallback = true
+            recorder.status = "无法自动返回，请使用系统左上角入口或底部手势"
+            recorder.publishCurrentSnapshot()
+        }
     }
 
     private func requiresManualReturn(from url: URL) -> Bool {
@@ -761,6 +841,81 @@ private let sharedRecordingRequestNotificationCallback: CFNotificationCallback =
         .takeUnretainedValue()
     DispatchQueue.main.async {
         requestObserver.receive()
+    }
+}
+
+// This intentionally invokes only the system-owned back navigation action that
+// is already represented by iOS in the status bar. It does not identify the
+// keyboard host, open an arbitrary bundle identifier, or modify keyboard state.
+private enum SystemNavigationReturnAction {
+    @MainActor
+    static func perform() -> Bool {
+        guard let action = action(from: UIApplication.shared) else {
+            return false
+        }
+
+        let canSendSelector = NSSelectorFromString("canSendResponse")
+        if action.responds(to: canSendSelector) {
+            typealias CanSendImplementation = @convention(c) (
+                AnyObject,
+                Selector
+            ) -> Bool
+            let canSend = unsafeBitCast(
+                action.method(for: canSendSelector),
+                to: CanSendImplementation.self
+            )
+            guard canSend(action, canSendSelector) else {
+                return false
+            }
+        }
+
+        let destinationsSelector = NSSelectorFromString("destinations")
+        guard action.responds(to: destinationsSelector),
+              let destinations = action.perform(destinationsSelector)?
+                .takeUnretainedValue() as? NSArray,
+              let firstDestination = destinations.firstObject as? NSNumber else {
+            return false
+        }
+
+        let responseSelector = NSSelectorFromString(
+            "sendResponseForDestination:"
+        )
+        guard action.responds(to: responseSelector) else {
+            return false
+        }
+
+        typealias SendResponseImplementation = @convention(c) (
+            AnyObject,
+            Selector,
+            UInt
+        ) -> Bool
+        let sendResponse = unsafeBitCast(
+            action.method(for: responseSelector),
+            to: SendResponseImplementation.self
+        )
+        return sendResponse(
+            action,
+            responseSelector,
+            firstDestination.uintValue
+        )
+    }
+
+    @MainActor
+    private static func action(from application: UIApplication) -> NSObject? {
+        let actionSelector = NSSelectorFromString("_systemNavigationAction")
+        if application.responds(to: actionSelector),
+           let action = application.perform(actionSelector)?
+            .takeUnretainedValue() as? NSObject {
+            return action
+        }
+
+        guard let actionVariable = class_getInstanceVariable(
+            UIApplication.self,
+            "_systemNavigationAction"
+        ) else {
+            return nil
+        }
+        return object_getIvar(application, actionVariable) as? NSObject
     }
 }
 
