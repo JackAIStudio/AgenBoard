@@ -15,8 +15,6 @@
 		4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */; };
 		4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000022C10000100AB0001 /* KeyboardViewController.swift */; };
 		4B1000032C10000100AB0001 /* AgenBoardKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		4B1000132C10000100AB0001 /* KeyboardHostTracker.m in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000122C10000100AB0001 /* KeyboardHostTracker.m */; };
-		4B1000152C10000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */; };
 		4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000162C10000100AB0001 /* PinyinInputEngine.swift */; };
 		4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2000022C20000100AB0001 /* RimePinyinEngine.swift */; };
 		4B2000032C20000100AB0001 /* RimeData in Resources */ = {isa = PBXBuildFile; fileRef = 4B2000042C20000100AB0001 /* RimeData */; };
@@ -75,8 +73,6 @@
 		4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AgenBoardKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		4B1000082C10000100AB0001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgenBoardKeyboard.entitlements; sourceTree = "<group>"; };
-		4B1000122C10000100AB0001 /* KeyboardHostTracker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KeyboardHostTracker.m; sourceTree = "<group>"; };
-		4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyKeyboardHostResolver.swift; sourceTree = "<group>"; };
 		4B1000162C10000100AB0001 /* PinyinInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinInputEngine.swift; sourceTree = "<group>"; };
 		4B2000022C20000100AB0001 /* RimePinyinEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimePinyinEngine.swift; sourceTree = "<group>"; };
 		4B2000042C20000100AB0001 /* RimeData */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeData; sourceTree = "<group>"; };
@@ -170,8 +166,6 @@
 				4B1000162C10000100AB0001 /* PinyinInputEngine.swift */,
 				4B2000022C20000100AB0001 /* RimePinyinEngine.swift */,
 				4B2000042C20000100AB0001 /* RimeData */,
-				4B1000122C10000100AB0001 /* KeyboardHostTracker.m */,
-				4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */,
 				4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */,
 				4B1000082C10000100AB0001 /* Info.plist */,
 				548000042CA0000100AB0001 /* PrivacyInfo.xcprivacy */,
@@ -327,8 +321,6 @@
 				4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */,
 				4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */,
 				4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */,
-				4B1000132C10000100AB0001 /* KeyboardHostTracker.m in Sources */,
-				4B1000152C10000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */,
 				4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

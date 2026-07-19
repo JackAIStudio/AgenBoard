@@ -1,5 +1,4 @@
 import UIKit
-import ObjectiveC.runtime
 
 final class KeyboardViewController: UIInputViewController,
     UICollectionViewDataSource,
@@ -116,7 +115,6 @@ final class KeyboardViewController: UIInputViewController,
     private var appLaunchRequestedAt: TimeInterval?
     private var appOpenVerificationTask: Task<Void, Never>?
     private var liveRecordingStartFallbackTask: Task<Void, Never>?
-    private var hostCaptureTask: Task<Void, Never>?
     private var launchFailureMessage: String?
     private var launchFailureMessageUntil: TimeInterval = 0
     private var hasStartedPinyinWarmup = false
@@ -148,7 +146,6 @@ final class KeyboardViewController: UIInputViewController,
         hapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
         refreshQuickPhraseModuleVisibility()
         reloadPhraseModule()
-        prefetchHostBundleIdentifier()
         startSnapshotTimer()
     }
 
@@ -156,8 +153,6 @@ final class KeyboardViewController: UIInputViewController,
         super.viewDidDisappear(animated)
         endCursorTracking(refreshSnapshot: false)
         stopDeleting()
-        hostCaptureTask?.cancel()
-        hostCaptureTask = nil
         liveRecordingStartFallbackTask?.cancel()
         liveRecordingStartFallbackTask = nil
         stopSnapshotTimer()
@@ -1606,7 +1601,7 @@ final class KeyboardViewController: UIInputViewController,
             // again in the background; if it cannot, verification below falls
             // back to foreground launch instead of making every tap switch apps.
             if let request = SharedCommandStore.requestRecordingToggle(
-                shouldReturnToPreviousInterface: false
+                requiresForegroundRoundTrip: false
             ) {
                 RecordingLaunchMetrics.mark(
                     "keyboard_live_request_persisted",
@@ -1632,24 +1627,18 @@ final class KeyboardViewController: UIInputViewController,
             return
         }
 
-        // Host discovery is prefetched while the keyboard is visible. On tap we
-        // only trigger one non-blocking refresh and launch immediately; returning
-        // to the host is a fallback concern and must not delay recording startup.
         SharedCommandStore.recordKeyboardDiagnostic(
-            "cold_app_host_capture_started",
+            "cold_app_manual_round_trip_started",
             detail: diagnosticState
         )
-        hostCaptureTask?.cancel()
-        hostCaptureTask = nil
-        refreshHostBundleIdentifierOnce()
 
         if let request = SharedCommandStore.requestRecordingToggle(
-            shouldReturnToPreviousInterface: true
+            requiresForegroundRoundTrip: true
         ) {
             RecordingLaunchMetrics.mark(
                 "keyboard_cold_request_persisted",
                 request: request,
-                detail: request.sourceHostBundleIdentifier ?? "host_unavailable"
+                detail: "manual_return"
             )
             appLaunchRequestedAt = request.requestedAt
             statusLabel.text = "正在打开 AgenBoard 并启动录音..."
@@ -1662,93 +1651,10 @@ final class KeyboardViewController: UIInputViewController,
             appLaunchRequestedAt = now
             statusLabel.text = "共享通道不可用，正在打开 AgenBoard..."
             openContainingApp(
-                URL(string: "agenboard://record?returnToPrevious=1"),
+                URL(string: "agenboard://record?manualReturn=1"),
                 reason: "cold_shared_request_failed"
             )
         }
-    }
-
-    private func prefetchHostBundleIdentifier() {
-        hostCaptureTask?.cancel()
-        let startedAt = Date().timeIntervalSince1970
-
-        guard #available(iOS 26.4, *) else {
-            refreshHostBundleIdentifierOnce()
-            return
-        }
-
-        hostCaptureTask = Task { @MainActor [weak self] in
-            for _ in 0..<10 {
-                guard let self, !Task.isCancelled else {
-                    return
-                }
-
-                self.refreshHostBundleIdentifierOnce()
-                let capturedAt =
-                    SharedCommandStore.latestKeyboardHostBundleIdentifierCapturedAt()
-                if capturedAt >= startedAt - 0.1 {
-                    RecordingLaunchMetrics.mark(
-                        "keyboard_host_prefetch_ready",
-                        requestedAt: startedAt
-                    )
-                    return
-                }
-
-                do {
-                    try await Task.sleep(nanoseconds: 75_000_000)
-                } catch {
-                    return
-                }
-            }
-
-            RecordingLaunchMetrics.mark(
-                "keyboard_host_prefetch_timed_out",
-                requestedAt: startedAt
-            )
-        }
-    }
-
-    private func refreshHostBundleIdentifierOnce() {
-        if #available(iOS 26.4, *) {
-            refreshHostBundleIdentifierUsingArbiterOnce()
-            return
-        }
-
-        if let bundleIdentifier = LegacyKeyboardHostResolver.resolve(from: self) {
-            SharedCommandStore.storeKeyboardHostBundleIdentifier(bundleIdentifier)
-            SharedCommandStore.recordKeyboardDiagnostic(
-                "host_bundle_captured",
-                detail: bundleIdentifier
-            )
-        } else {
-            SharedCommandStore.storeKeyboardHostCaptureFailure(
-                "legacy resolver returned nil"
-            )
-            SharedCommandStore.recordKeyboardDiagnostic(
-                "host_bundle_capture_failed",
-                detail: "legacy resolver returned nil"
-            )
-        }
-    }
-
-    private func refreshHostBundleIdentifierUsingArbiterOnce() {
-        let selector = NSSelectorFromString(
-            "refreshHostBundleIdentifier"
-        )
-        guard let trackerClass = NSClassFromString("KeyboardHostTracker"),
-              let method = class_getClassMethod(trackerClass, selector) else {
-            return
-        }
-
-        typealias RefreshImplementation = @convention(c) (
-            AnyObject,
-            Selector
-        ) -> Void
-        let refresh = unsafeBitCast(
-            method_getImplementation(method),
-            to: RefreshImplementation.self
-        )
-        refresh(trackerClass, selector)
     }
 
     private func startSnapshotTimer() {
@@ -1915,7 +1821,7 @@ final class KeyboardViewController: UIInputViewController,
         components.queryItems = [
             URLQueryItem(name: "requestID", value: request.id),
             URLQueryItem(name: "requestedAt", value: String(request.requestedAt)),
-            URLQueryItem(name: "returnToPrevious", value: "1")
+            URLQueryItem(name: "manualReturn", value: "1")
         ]
         return components.url
     }
@@ -2127,7 +2033,7 @@ final class KeyboardViewController: UIInputViewController,
 
             self.liveRecordingStartFallbackTask = nil
             guard let fallbackRequest = SharedCommandStore.requestRecordingToggle(
-                shouldReturnToPreviousInterface: true
+                requiresForegroundRoundTrip: true
             ) else {
                 self.showLaunchFailure("后台录音不可用，且共享通道无法创建唤起请求")
                 return

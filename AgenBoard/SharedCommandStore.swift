@@ -20,8 +20,7 @@ struct SharedRecognitionResult {
 struct SharedRecordingToggleRequest {
     let id: String
     let requestedAt: TimeInterval
-    let shouldReturnToPreviousInterface: Bool
-    let sourceHostBundleIdentifier: String?
+    let requiresForegroundRoundTrip: Bool
 }
 
 enum RecordingLaunchMetrics {
@@ -107,13 +106,8 @@ enum SharedCommandStore {
 
     private static let recordingToggleRequestIDKey = "recordingToggleRequestID"
     private static let recordingToggleRequestedAtKey = "recordingToggleRequestedAt"
-    private static let recordingToggleShouldReturnKey = "recordingToggleShouldReturn"
-    private static let recordingToggleHostBundleIdentifierKey =
-        "recordingToggleHostBundleIdentifier"
-    private static let keyboardHostBundleIdentifierKey =
-        "keyboardHostBundleIdentifier"
-    private static let keyboardHostBundleIdentifierCapturedAtKey =
-        "keyboardHostBundleIdentifierCapturedAt"
+    private static let recordingToggleRequiresForegroundRoundTripKey =
+        "recordingToggleRequiresForegroundRoundTrip"
     private static let recordingToggleHandledRequestIDKey = "recordingToggleHandledRequestID"
     private static let recordingIsActiveKey = "recordingIsActive"
     private static let recordingIsTranscribingKey = "recordingIsTranscribing"
@@ -291,29 +285,23 @@ enum SharedCommandStore {
 
     @discardableResult
     static func requestRecordingToggle(
-        shouldReturnToPreviousInterface: Bool = true
+        requiresForegroundRoundTrip: Bool = true
     ) -> SharedRecordingToggleRequest? {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return nil
         }
 
         let requestedAt = Date().timeIntervalSince1970
-        let sourceHostBundleIdentifier = recentKeyboardHostBundleIdentifier(
-            from: defaults,
-            maxAge: 300
-        )
         let request = SharedRecordingToggleRequest(
             id: UUID().uuidString,
             requestedAt: requestedAt,
-            shouldReturnToPreviousInterface: shouldReturnToPreviousInterface,
-            sourceHostBundleIdentifier: sourceHostBundleIdentifier
+            requiresForegroundRoundTrip: requiresForegroundRoundTrip
         )
         defaults.set(request.id, forKey: recordingToggleRequestIDKey)
         defaults.set(requestedAt, forKey: recordingToggleRequestedAtKey)
-        defaults.set(shouldReturnToPreviousInterface, forKey: recordingToggleShouldReturnKey)
         defaults.set(
-            sourceHostBundleIdentifier,
-            forKey: recordingToggleHostBundleIdentifierKey
+            requiresForegroundRoundTrip,
+            forKey: recordingToggleRequiresForegroundRoundTripKey
         )
         defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
         defaults.set(true, forKey: keyboardAutoInsertPendingKey)
@@ -342,72 +330,10 @@ enum SharedCommandStore {
         return SharedRecordingToggleRequest(
             id: id,
             requestedAt: defaults.double(forKey: recordingToggleRequestedAtKey),
-            shouldReturnToPreviousInterface: defaults.bool(
-                forKey: recordingToggleShouldReturnKey
-            ),
-            sourceHostBundleIdentifier: defaults.string(
-                forKey: recordingToggleHostBundleIdentifierKey
+            requiresForegroundRoundTrip: defaults.bool(
+                forKey: recordingToggleRequiresForegroundRoundTripKey
             )
         )
-    }
-
-    static func latestKeyboardHostBundleIdentifier() -> String? {
-        UserDefaults(suiteName: appGroupIdentifier)?
-            .string(forKey: keyboardHostBundleIdentifierKey)
-    }
-
-    static func latestRecentKeyboardHostBundleIdentifier(
-        maxAge: TimeInterval = 300
-    ) -> String? {
-        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
-            return nil
-        }
-        return recentKeyboardHostBundleIdentifier(from: defaults, maxAge: maxAge)
-    }
-
-    static func latestKeyboardHostBundleIdentifierCapturedAt() -> TimeInterval {
-        UserDefaults(suiteName: appGroupIdentifier)?
-            .double(forKey: keyboardHostBundleIdentifierCapturedAtKey) ?? 0
-    }
-
-    private static func recentKeyboardHostBundleIdentifier(
-        from defaults: UserDefaults,
-        maxAge: TimeInterval
-    ) -> String? {
-        let capturedAt = defaults.double(
-            forKey: keyboardHostBundleIdentifierCapturedAtKey
-        )
-        let age = Date().timeIntervalSince1970 - capturedAt
-        guard age >= -1, age < maxAge else {
-            return nil
-        }
-        return defaults.string(forKey: keyboardHostBundleIdentifierKey)
-    }
-
-    static func storeKeyboardHostBundleIdentifier(_ bundleIdentifier: String) {
-        guard !bundleIdentifier.isEmpty,
-              let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
-            return
-        }
-
-        defaults.set(bundleIdentifier, forKey: keyboardHostBundleIdentifierKey)
-        defaults.set(
-            Date().timeIntervalSince1970,
-            forKey: keyboardHostBundleIdentifierCapturedAtKey
-        )
-        defaults.set(
-            "legacy host captured",
-            forKey: "keyboardHostTrackerRefreshStatus"
-        )
-        defaults.synchronize()
-    }
-
-    static func storeKeyboardHostCaptureFailure(_ status: String) {
-        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
-            return
-        }
-
-        defaults.set(status, forKey: "keyboardHostTrackerRefreshStatus")
     }
 
     static func latestHandledRecordingToggleRequestID() -> String? {

@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import ObjectiveC.runtime
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -22,9 +21,7 @@ struct ContentView: View {
     @State private var handledRecordingRequestIDs: Set<String> = []
     @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
-    @State private var shouldReturnToPreviousInterface = false
-    @State private var isReturnToPreviousInterfaceScheduled = false
-    @State private var returnHostBundleIdentifier: String?
+    @State private var showsManualReturnGuidance = false
     @State private var showsQuickPhraseLibrary = false
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
@@ -59,6 +56,24 @@ struct ContentView: View {
                         Text(recorder.status)
                             .font(.callout)
                             .foregroundStyle(.secondary)
+
+                        if showsManualReturnGuidance {
+                            Label {
+                                Text(
+                                    recorder.isRecording
+                                        ? "录音已启动，请点屏幕左上角的系统返回入口，回到刚才的 App。"
+                                        : "正在准备录音；启动后请点屏幕左上角的系统返回入口。"
+                                )
+                            } icon: {
+                                Image(systemName: "arrow.backward.circle.fill")
+                            }
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.blue)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.blue.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
                     }
 
                     NavigationLink {
@@ -461,14 +476,11 @@ struct ContentView: View {
                 // A stashed system PiP remains represented by an edge chevron.
                 // Ending PiP with the recording removes that system-owned tab.
                 pip.stop()
+                showsManualReturnGuidance = false
             }
-            returnToPreviousInterfaceIfReady()
         }
         .onChange(of: recorder.audioLevel) { _, level in
             pip.setAudioLevel(level)
-        }
-        .onChange(of: pip.isPictureInPictureActive) { _, _ in
-            returnToPreviousInterfaceIfReady()
         }
         .onChange(of: pip.isPreparedForBackgroundTransition) { _, _ in
             if pip.isPreparedForBackgroundTransition {
@@ -477,7 +489,6 @@ struct ContentView: View {
                     request: activeLaunchRequest
                 )
             }
-            returnToPreviousInterfaceIfReady()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -531,26 +542,20 @@ struct ContentView: View {
             detail: url.absoluteString
         )
 
-        if shouldReturnToPreviousInterface(from: url) {
-            shouldReturnToPreviousInterface = true
-            returnHostBundleIdentifier =
-                SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
+        if requiresManualReturn(from: url) {
+            showsManualReturnGuidance = true
         }
 
         if let request = incomingRequest {
             handleRecordingRequest(request)
         } else {
-            if shouldReturnToPreviousInterface(from: url) {
+            if requiresManualReturn(from: url) {
                 pip.prepareForAutomaticStart()
             } else {
                 pip.start()
             }
             recorder.toggleRecording()
         }
-
-        returnToPreviousInterfaceIfReady()
     }
 
     private func configurePictureInPictureActions() {
@@ -567,9 +572,8 @@ struct ContentView: View {
                 "main_pip_restore_requested",
                 request: activeLaunchRequest
             )
-            shouldReturnToPreviousInterface = false
-            isReturnToPreviousInterfaceScheduled = false
-            returnHostBundleIdentifier = nil
+            showsManualReturnGuidance = false
+            activeLaunchRequest = nil
             showsQuickPhraseLibrary = false
         }
     }
@@ -619,17 +623,15 @@ struct ContentView: View {
             return nil
         }
 
-        let shouldReturn = shouldReturnToPreviousInterface(from: url)
+        let requiresForegroundRoundTrip = requiresManualReturn(from: url)
 
         if let sharedRequest = SharedCommandStore.latestRecordingToggleRequest(),
            sharedRequest.id == requestID {
             return SharedRecordingToggleRequest(
                 id: sharedRequest.id,
                 requestedAt: sharedRequest.requestedAt,
-                shouldReturnToPreviousInterface: shouldReturn
-                    || sharedRequest.shouldReturnToPreviousInterface,
-                sourceHostBundleIdentifier:
-                    sharedRequest.sourceHostBundleIdentifier
+                requiresForegroundRoundTrip: requiresForegroundRoundTrip
+                    || sharedRequest.requiresForegroundRoundTrip
             )
         }
 
@@ -639,22 +641,14 @@ struct ContentView: View {
             return SharedRecordingToggleRequest(
                 id: requestID,
                 requestedAt: requestedAt,
-                shouldReturnToPreviousInterface: shouldReturn,
-                sourceHostBundleIdentifier:
-                    SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                        maxAge: 300
-                    )
+                requiresForegroundRoundTrip: requiresForegroundRoundTrip
             )
         }
 
         return SharedRecordingToggleRequest(
             id: requestID,
             requestedAt: Date().timeIntervalSince1970,
-            shouldReturnToPreviousInterface: shouldReturn,
-            sourceHostBundleIdentifier:
-                SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
+            requiresForegroundRoundTrip: requiresForegroundRoundTrip
         )
     }
 
@@ -674,7 +668,7 @@ struct ContentView: View {
         // switching apps. Cold/fallback requests wait until their URL launch has
         // made the scene active, avoiding a race with foreground activation.
         let requiresForeground = !recorder.isRecording
-            && request.shouldReturnToPreviousInterface
+            && request.requiresForegroundRoundTrip
         guard !requiresForeground || scenePhase == .active else {
             if deferredRecordingRequestID != request.id {
                 deferredRecordingRequestID = request.id
@@ -695,13 +689,8 @@ struct ContentView: View {
             )
         }
 
-        if request.shouldReturnToPreviousInterface {
-            shouldReturnToPreviousInterface = true
-            returnHostBundleIdentifier =
-                request.sourceHostBundleIdentifier
-                ?? SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
+        if request.requiresForegroundRoundTrip {
+            showsManualReturnGuidance = true
         }
 
         activeLaunchRequest = request
@@ -713,7 +702,7 @@ struct ContentView: View {
         handledRecordingRequestIDs.insert(request.id)
         SharedCommandStore.markRecordingToggleRequestHandled(request.id)
 
-        if request.shouldReturnToPreviousInterface {
+        if request.requiresForegroundRoundTrip {
             pip.prepareForAutomaticStart()
         } else if !pip.isPictureInPictureActive {
             pip.start()
@@ -721,78 +710,13 @@ struct ContentView: View {
         recorder.toggleRecording(request: request)
     }
 
-    private func shouldReturnToPreviousInterface(from url: URL) -> Bool {
+    private func requiresManualReturn(from url: URL) -> Bool {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
-            .contains(where: { $0.name == "returnToPrevious" && $0.value == "1" }) == true
-    }
-
-    private func returnToPreviousInterfaceIfReady() {
-        guard shouldReturnToPreviousInterface else {
-            return
-        }
-
-        guard !isReturnToPreviousInterfaceScheduled,
-              (pip.isPictureInPictureActive || pip.isPreparedForBackgroundTransition),
-              recorder.isRecording else {
-            print(
-                "[AgenBoardReturn] 等待返回条件："
-                    + "pip=\(pip.isPictureInPictureActive), "
-                    + "prepared=\(pip.isPreparedForBackgroundTransition), "
-                    + "recording=\(recorder.isRecording)"
-            )
-            return
-        }
-
-        isReturnToPreviousInterfaceScheduled = true
-
-        Task { @MainActor in
-            do {
-                try await Task.sleep(nanoseconds: 100_000_000)
-            } catch {
-                isReturnToPreviousInterfaceScheduled = false
-                return
-            }
-
-            guard shouldReturnToPreviousInterface,
-                  (pip.isPictureInPictureActive || pip.isPreparedForBackgroundTransition),
-                  recorder.isRecording else {
-                isReturnToPreviousInterfaceScheduled = false
-                return
-            }
-
-            shouldReturnToPreviousInterface = false
-            isReturnToPreviousInterfaceScheduled = false
-
-            let hostBundleIdentifier = returnHostBundleIdentifier
-                ?? SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
-            RecordingLaunchMetrics.mark(
-                "main_return_attempt_started",
-                request: activeLaunchRequest,
-                detail: hostBundleIdentifier ?? "host_unavailable"
-            )
-            let restored = await PreviousInterfaceRestorer.restore(
-                hostBundleIdentifier: hostBundleIdentifier
-            )
-            RecordingLaunchMetrics.mark(
-                restored ? "main_return_succeeded" : "main_return_failed",
-                request: activeLaunchRequest,
-                detail: hostBundleIdentifier ?? "host_unavailable"
-            )
-            print("[AgenBoardReturn] 返回上一个 App：\(restored)")
-
-            if restored {
-                returnHostBundleIdentifier = nil
-                activeLaunchRequest = nil
-            } else {
-                recorder.status =
-                    "画中画已启动，自动返回失败（"
-                    + "\(hostBundleIdentifier ?? "未捕获宿主 App")）"
-                recorder.publishCurrentSnapshot()
-            }
-        }
+            .contains(where: { item in
+                (item.name == "manualReturn" || item.name == "returnToPrevious")
+                    && item.value == "1"
+            }) == true
     }
 }
 
@@ -837,195 +761,6 @@ private let sharedRecordingRequestNotificationCallback: CFNotificationCallback =
         .takeUnretainedValue()
     DispatchQueue.main.async {
         requestObserver.receive()
-    }
-}
-
-private enum PreviousInterfaceRestorer {
-    @MainActor
-    static func restore(hostBundleIdentifier: String?) async -> Bool {
-        let application = UIApplication.shared
-
-        if restoreUsingSystemNavigationAction(application) {
-            return true
-        }
-
-        if let hostBundleIdentifier,
-           restoreUsingHostApplication(hostBundleIdentifier) {
-            return true
-        }
-
-        for _ in 0..<3 {
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            if restoreUsingSystemNavigationAction(application) {
-                return true
-            }
-        }
-
-        if let hostBundleIdentifier,
-           restoreUsingHostApplication(hostBundleIdentifier) {
-            return true
-        }
-
-        print(
-            "[AgenBoardReturn] 无法返回宿主 App，捕获的 Bundle ID："
-                + "\(hostBundleIdentifier ?? "无")"
-        )
-        return false
-    }
-
-    @MainActor
-    private static func restoreUsingSystemNavigationAction(
-        _ application: UIApplication
-    ) -> Bool {
-        guard let action = systemNavigationAction(from: application) else {
-            return false
-        }
-
-        let canSendSelector = NSSelectorFromString("canSendResponse")
-        if action.responds(to: canSendSelector) {
-            typealias CanSendImplementation = @convention(c) (
-                AnyObject,
-                Selector
-            ) -> Bool
-            let canSend = unsafeBitCast(
-                action.method(for: canSendSelector),
-                to: CanSendImplementation.self
-            )
-            guard canSend(action, canSendSelector) else {
-                return false
-            }
-        }
-
-        let destinationsSelector = NSSelectorFromString("destinations")
-
-        guard action.responds(to: destinationsSelector),
-              let destinations = action.perform(destinationsSelector)?
-                .takeUnretainedValue() as? NSArray,
-              let firstDestination = destinations.firstObject as? NSNumber else {
-            return false
-        }
-
-        let responseSelector = NSSelectorFromString(
-            "sendResponseForDestination:"
-        )
-
-        guard action.responds(to: responseSelector) else {
-            print("[AgenBoardReturn] 系统返回导航动作无法发送响应")
-            return false
-        }
-
-        typealias SendResponseImplementation = @convention(c) (
-            AnyObject,
-            Selector,
-            UInt
-        ) -> Bool
-
-        let implementation = action.method(for: responseSelector)
-        let sendResponse = unsafeBitCast(
-            implementation,
-            to: SendResponseImplementation.self
-        )
-        let destination = firstDestination.uintValue
-        let didSend = sendResponse(action, responseSelector, destination)
-        print(
-            "[AgenBoardReturn] 系统导航返回目标 \(destination)：\(didSend)"
-        )
-        return didSend
-    }
-
-    @MainActor
-    private static func systemNavigationAction(
-        from application: UIApplication
-    ) -> NSObject? {
-        let actionSelector = NSSelectorFromString("_systemNavigationAction")
-
-        if application.responds(to: actionSelector),
-           let action = application.perform(actionSelector)?
-            .takeUnretainedValue() as? NSObject {
-            return action
-        }
-
-        guard let actionVariable = class_getInstanceVariable(
-            UIApplication.self,
-            "_systemNavigationAction"
-        ) else {
-            return nil
-        }
-
-        return object_getIvar(application, actionVariable) as? NSObject
-    }
-
-    @MainActor
-    private static func restoreUsingHostApplication(
-        _ bundleIdentifier: String
-    ) -> Bool {
-        guard bundleIdentifier != SharedCommandStore.appBundleIdentifier,
-              bundleIdentifier != Bundle.main.bundleIdentifier else {
-            return false
-        }
-
-        if NSClassFromString("LSApplicationWorkspace") == nil {
-            let frameworkPath =
-                "/System/Library/Frameworks/"
-                + "MobileCoreServices.framework"
-            _ = Bundle(path: frameworkPath)?.load()
-        }
-
-        let defaultWorkspaceSelector = NSSelectorFromString(
-            "defaultWorkspace"
-        )
-        guard let workspaceClass = NSClassFromString(
-            "LSApplicationWorkspace"
-        ),
-        let workspaceMethod = class_getClassMethod(
-            workspaceClass,
-            defaultWorkspaceSelector
-        ) else {
-            print("[AgenBoardReturn] LaunchServices 工作区不可用")
-            return false
-        }
-
-        typealias DefaultWorkspaceImplementation = @convention(c) (
-            AnyObject,
-            Selector
-        ) -> AnyObject?
-        let defaultWorkspace = unsafeBitCast(
-            method_getImplementation(workspaceMethod),
-            to: DefaultWorkspaceImplementation.self
-        )
-
-        guard let workspace = defaultWorkspace(
-            workspaceClass,
-            defaultWorkspaceSelector
-        ) as? NSObject else {
-            return false
-        }
-
-        let openSelector = NSSelectorFromString(
-            "openApplicationWithBundleID:"
-        )
-        guard workspace.responds(to: openSelector) else {
-            return false
-        }
-
-        typealias OpenApplicationImplementation = @convention(c) (
-            AnyObject,
-            Selector,
-            NSString
-        ) -> Bool
-        let openApplication = unsafeBitCast(
-            workspace.method(for: openSelector),
-            to: OpenApplicationImplementation.self
-        )
-        let didOpen = openApplication(
-            workspace,
-            openSelector,
-            bundleIdentifier as NSString
-        )
-        print(
-            "[AgenBoardReturn] 激活宿主 \(bundleIdentifier)：\(didOpen)"
-        )
-        return didOpen
     }
 }
 
