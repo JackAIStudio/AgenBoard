@@ -26,6 +26,7 @@ final class SpeechRecorder: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var meteringTask: Task<Void, Never>?
     private var playbackStopTask: Task<Void, Never>?
+    private var isStartingRecording = false
     private var currentHistoryItemID: UUID?
     private var currentProvider = SpeechRecognitionProvider.apple
     private var currentRecognitionMode = RecognitionHotwordMode.withHotwords
@@ -97,12 +98,31 @@ final class SpeechRecorder: ObservableObject {
     }
 
     func startRecordingIfNeeded(request: SharedRecordingToggleRequest? = nil) {
-        guard !isRecording, !isTranscribing else {
+        if isRecording {
+            publishRequestResponse(for: request, phase: .recording)
             return
         }
 
-        Task {
-            await startRecording(request: request)
+        guard !isTranscribing else {
+            publishRequestResponse(
+                for: request,
+                phase: .failed,
+                message: "正在处理上一段语音"
+            )
+            return
+        }
+
+        guard !isStartingRecording else {
+            return
+        }
+
+        isStartingRecording = true
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.startRecording(request: request)
+            self.isStartingRecording = false
         }
     }
 
@@ -115,6 +135,7 @@ final class SpeechRecorder: ObservableObject {
             recorder?.stop()
             recorder = nil
             isRecording = false
+            deactivateAudioSession()
         }
 
         stopMetering()
@@ -155,7 +176,9 @@ final class SpeechRecorder: ObservableObject {
                 _ = try AliyunSpeechConfiguration.load()
             } catch {
                 SharedCommandStore.cancelKeyboardAutoInsert()
-                showError("阿里云配置不可用：\(error.localizedDescription)")
+                let message = "阿里云配置不可用：\(error.localizedDescription)"
+                publishRequestResponse(for: request, phase: .failed, message: message)
+                showError(message)
                 return
             }
         }
@@ -165,6 +188,11 @@ final class SpeechRecorder: ObservableObject {
                 request: request
             )
             SharedCommandStore.cancelKeyboardAutoInsert()
+            publishRequestResponse(
+                for: request,
+                phase: .failed,
+                message: errorMessage.isEmpty ? "录音权限不可用" : errorMessage
+            )
             return
         }
         RecordingLaunchMetrics.mark(
@@ -213,6 +241,12 @@ final class SpeechRecorder: ObservableObject {
 
             guard recorder.record() else {
                 SharedCommandStore.cancelKeyboardAutoInsert()
+                deactivateAudioSession()
+                publishRequestResponse(
+                    for: request,
+                    phase: .failed,
+                    message: "录音启动失败"
+                )
                 showError("录音启动失败。")
                 return
             }
@@ -227,6 +261,7 @@ final class SpeechRecorder: ObservableObject {
                 "main_recorder_started",
                 request: request
             )
+            publishRequestResponse(for: request, phase: .recording)
         } catch {
             let nsError = error as NSError
             status = "录音启动失败"
@@ -236,7 +271,10 @@ final class SpeechRecorder: ObservableObject {
                 detail: "domain=\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription)"
             )
             SharedCommandStore.cancelKeyboardAutoInsert()
-            showError("无法开始录音：\(error.localizedDescription)")
+            deactivateAudioSession()
+            let message = "无法开始录音：\(error.localizedDescription)"
+            publishRequestResponse(for: request, phase: .failed, message: message)
+            showError(message)
         }
     }
 
@@ -246,6 +284,7 @@ final class SpeechRecorder: ObservableObject {
         stopMetering()
         recorder = nil
         isRecording = false
+        deactivateAudioSession()
         currentRecognitionMode = RecognitionPreferences.usesHotwords
             ? .withHotwords
             : .withoutHotwords
@@ -274,6 +313,28 @@ final class SpeechRecorder: ObservableObject {
             await self?.transcribeLatestRecording()
             self?.transcriptionTask = nil
         }
+    }
+
+    private func publishRequestResponse(
+        for request: SharedRecordingToggleRequest?,
+        phase: SharedRecordingRequestPhase,
+        message: String = ""
+    ) {
+        guard let request else {
+            return
+        }
+        SharedCommandStore.updateRecordingRequestResponse(
+            for: request,
+            phase: phase,
+            message: message
+        )
+    }
+
+    private func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 
     private func transcribeLatestRecording() async {

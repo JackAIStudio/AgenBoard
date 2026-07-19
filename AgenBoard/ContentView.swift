@@ -20,10 +20,14 @@ struct ContentView: View {
     ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
     @State private var aliyunConfigured = false
     @State private var handledRecordingRequestIDs: Set<String> = []
+    @State private var retriedFailedRecordingRequestIDs: Set<String> = []
     @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
+    @State private var keepsPictureInPictureAlive = false
     @State private var showsManualReturnGuidance = false
     @State private var manualReturnNeedsSystemFallback = false
+    @State private var systemReturnActionIsReady = false
+    @State private var pendingReturnAttemptID: UUID?
     @State private var showsQuickPhraseLibrary = false
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
@@ -41,6 +45,8 @@ struct ContentView: View {
 
     private var canReturnToPreviousInterface: Bool {
         recorder.isRecording
+            && systemReturnActionIsReady
+            && pendingReturnAttemptID == nil
             && (pip.isPictureInPictureActive
                 || pip.isPreparedForBackgroundTransition)
     }
@@ -76,9 +82,13 @@ struct ContentView: View {
                                 Text(
                                     manualReturnNeedsSystemFallback
                                         ? "系统没有提供可调用的返回目标，请点屏幕左上角的小字返回；若来自主屏幕或 Spotlight，请使用系统手势。"
+                                        : pendingReturnAttemptID != nil
+                                            ? "已请求系统返回，正在等待切换到刚才的 App…"
                                         : canReturnToPreviousInterface
                                             ? "点击下面的大按钮回到刚才的 App，录音会继续。"
-                                            : "录音和画中画准备完成后，返回按钮会自动可用。"
+                                            : !systemReturnActionIsReady
+                                                ? "正在等待系统返回入口…"
+                                                : "录音和画中画准备完成后，返回按钮会自动可用。"
                                 )
                                 .font(.subheadline)
 
@@ -419,7 +429,13 @@ struct ContentView: View {
                             Spacer()
 
                             Button {
-                                pip.toggle()
+                                if pip.isPictureInPictureActive {
+                                    keepsPictureInPictureAlive = false
+                                    pip.stop()
+                                } else {
+                                    keepsPictureInPictureAlive = true
+                                    pip.start()
+                                }
                             } label: {
                                 Label(pip.buttonTitle, systemImage: pip.buttonIcon)
                             }
@@ -502,7 +518,9 @@ struct ContentView: View {
             Text(recorder.errorMessage)
         }
         .onAppear {
+            keepsPictureInPictureAlive = true
             configurePictureInPictureActions()
+            pip.prepareForAutomaticStart()
         }
         .onChange(of: recorder.isRecording) { _, isRecording in
             pip.setRecordingState(isRecording)
@@ -512,11 +530,10 @@ struct ContentView: View {
                     request: activeLaunchRequest
                 )
             } else {
-                // A stashed system PiP remains represented by an edge chevron.
-                // Ending PiP with the recording removes that system-owned tab.
-                pip.stop()
                 showsManualReturnGuidance = false
                 manualReturnNeedsSystemFallback = false
+                systemReturnActionIsReady = false
+                pendingReturnAttemptID = nil
             }
         }
         .onChange(of: recorder.audioLevel) { _, level in
@@ -535,11 +552,27 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                if pendingReturnAttemptID != nil {
+                    failPendingReturnAttempt(detail: "scene_became_active_before_background")
+                }
                 handleLatestSharedRecordingRequest()
                 return
             }
 
-            guard recorder.isRecording,
+            if phase == .background {
+                if pendingReturnAttemptID != nil {
+                    RecordingLaunchMetrics.mark(
+                        "main_manual_return_background_transitioned",
+                        request: activeLaunchRequest
+                    )
+                }
+                pendingReturnAttemptID = nil
+                showsManualReturnGuidance = false
+                manualReturnNeedsSystemFallback = false
+                systemReturnActionIsReady = false
+            }
+
+            guard keepsPictureInPictureAlive,
                   phase == .inactive || phase == .background else {
                 return
             }
@@ -549,6 +582,9 @@ struct ContentView: View {
                 detail: "scene=\(String(describing: phase))"
             )
             pip.startForBackgroundTransition()
+        }
+        .task(id: showsManualReturnGuidance) {
+            await refreshSystemReturnActionReadiness()
         }
         .task {
             await observeKeyboardRecordingRequests()
@@ -596,17 +632,26 @@ struct ContentView: View {
         if requiresManualReturn(from: url) {
             showsManualReturnGuidance = true
             manualReturnNeedsSystemFallback = false
+            systemReturnActionIsReady = false
         }
 
         if let request = incomingRequest {
-            handleRecordingRequest(request)
+            handleRecordingRequest(request, allowsForegroundRetry: true)
         } else {
+            keepsPictureInPictureAlive = true
             if requiresManualReturn(from: url) {
                 pip.prepareForAutomaticStart()
             } else {
                 pip.start()
             }
-            recorder.toggleRecording()
+
+            let command = recordingCommand(from: url) ?? .start
+            switch command {
+            case .start:
+                recorder.startRecordingIfNeeded()
+            case .stop:
+                recorder.stopRecordingAndTranscribeIfNeeded()
+            }
         }
     }
 
@@ -616,6 +661,7 @@ struct ContentView: View {
                 "main_pip_closed_by_user",
                 request: activeLaunchRequest
             )
+            keepsPictureInPictureAlive = false
             recorder.stopRecordingAndTranscribeIfNeeded()
         }
 
@@ -628,6 +674,7 @@ struct ContentView: View {
             manualReturnNeedsSystemFallback = false
             activeLaunchRequest = nil
             showsQuickPhraseLibrary = false
+            keepsPictureInPictureAlive = true
         }
     }
 
@@ -684,9 +731,12 @@ struct ContentView: View {
                 id: sharedRequest.id,
                 requestedAt: sharedRequest.requestedAt,
                 requiresForegroundRoundTrip: requiresForegroundRoundTrip
-                    || sharedRequest.requiresForegroundRoundTrip
+                    || sharedRequest.requiresForegroundRoundTrip,
+                command: sharedRequest.command
             )
         }
+
+        let command = recordingCommand(from: url) ?? .start
 
         if let requestedAtValue = components.queryItems?
             .first(where: { $0.name == "requestedAt" })?.value,
@@ -694,33 +744,60 @@ struct ContentView: View {
             return SharedRecordingToggleRequest(
                 id: requestID,
                 requestedAt: requestedAt,
-                requiresForegroundRoundTrip: requiresForegroundRoundTrip
+                requiresForegroundRoundTrip: requiresForegroundRoundTrip,
+                command: command
             )
         }
 
         return SharedRecordingToggleRequest(
             id: requestID,
             requestedAt: Date().timeIntervalSince1970,
-            requiresForegroundRoundTrip: requiresForegroundRoundTrip
+            requiresForegroundRoundTrip: requiresForegroundRoundTrip,
+            command: command
         )
     }
 
-    private func handleRecordingRequest(_ request: SharedRecordingToggleRequest) {
+    private func recordingCommand(from url: URL) -> SharedRecordingCommand? {
+        guard let rawValue = URLComponents(
+            url: url,
+            resolvingAgainstBaseURL: false
+        )?.queryItems?.first(where: { $0.name == "command" })?.value else {
+            return nil
+        }
+        return SharedRecordingCommand(rawValue: rawValue)
+    }
+
+    private func handleRecordingRequest(
+        _ request: SharedRecordingToggleRequest,
+        allowsForegroundRetry: Bool = false
+    ) {
         let age = Date().timeIntervalSince1970 - request.requestedAt
         guard age >= -2, age < recordingRequestLifetime else {
             return
         }
 
-        guard !handledRecordingRequestIDs.contains(request.id),
-              request.id != SharedCommandStore.latestHandledRecordingToggleRequestID() else {
-            return
+        let wasAlreadyHandled = handledRecordingRequestIDs.contains(request.id)
+            || request.id == SharedCommandStore.latestHandledRecordingToggleRequestID()
+        if wasAlreadyHandled {
+            let response = SharedCommandStore.latestRecordingRequestResponse()
+            let canRetryFailedStart = allowsForegroundRetry
+                && scenePhase == .active
+                && request.command == .start
+                && !recorder.isRecording
+                && !retriedFailedRecordingRequestIDs.contains(request.id)
+                && response?.requestID == request.id
+                && response?.phase == .failed
+            guard canRetryFailedStart else {
+                return
+            }
+            retriedFailedRecordingRequestIDs.insert(request.id)
         }
 
-        // A live App-Group request intentionally gets one background start
-        // attempt so an already-established audio session can be reused without
-        // switching apps. Cold/fallback requests wait until their URL launch has
-        // made the scene active, avoiding a race with foreground activation.
-        let requiresForeground = !recorder.isRecording
+        // A live App-Group request gets one background start attempt while PiP
+        // keeps the process responsive. Cold/fallback requests wait until their
+        // URL launch makes the scene active, avoiding a foreground race.
+        let requiresForeground = request.command == .start
+            && !recorder.isRecording
             && request.requiresForegroundRoundTrip
         guard !requiresForeground || scenePhase == .active else {
             if deferredRecordingRequestID != request.id {
@@ -745,6 +822,7 @@ struct ContentView: View {
         if request.requiresForegroundRoundTrip {
             showsManualReturnGuidance = true
             manualReturnNeedsSystemFallback = false
+            systemReturnActionIsReady = false
         }
 
         activeLaunchRequest = request
@@ -755,13 +833,41 @@ struct ContentView: View {
 
         handledRecordingRequestIDs.insert(request.id)
         SharedCommandStore.markRecordingToggleRequestHandled(request.id)
+        SharedCommandStore.updateRecordingRequestResponse(
+            for: request,
+            phase: .accepted
+        )
 
+        keepsPictureInPictureAlive = true
         if request.requiresForegroundRoundTrip {
             pip.prepareForAutomaticStart()
         } else if !pip.isPictureInPictureActive {
             pip.start()
         }
-        recorder.toggleRecording(request: request)
+
+        switch request.command {
+        case .start:
+            if recorder.isRecording {
+                SharedCommandStore.updateRecordingRequestResponse(
+                    for: request,
+                    phase: .recording
+                )
+            } else if recorder.isTranscribing {
+                SharedCommandStore.updateRecordingRequestResponse(
+                    for: request,
+                    phase: .failed,
+                    message: "正在处理上一段语音"
+                )
+            } else {
+                recorder.startRecordingIfNeeded(request: request)
+            }
+        case .stop:
+            recorder.stopRecordingAndTranscribeIfNeeded()
+            SharedCommandStore.updateRecordingRequestResponse(
+                for: request,
+                phase: .stopped
+            )
+        }
     }
 
     private func returnToPreviousInterface() {
@@ -773,21 +879,94 @@ struct ContentView: View {
             "main_manual_return_button_tapped",
             request: activeLaunchRequest
         )
-        pip.startForBackgroundTransition()
-        let restored = SystemNavigationReturnAction.perform()
+        let attemptID = UUID()
+        pendingReturnAttemptID = attemptID
+        let responseSent = SystemNavigationReturnAction.perform()
         RecordingLaunchMetrics.mark(
-            restored ? "main_manual_return_succeeded" : "main_manual_return_failed",
+            responseSent
+                ? "main_manual_return_response_sent"
+                : "main_manual_return_response_rejected",
             request: activeLaunchRequest
         )
 
-        if restored {
-            showsManualReturnGuidance = false
-            manualReturnNeedsSystemFallback = false
-        } else {
-            manualReturnNeedsSystemFallback = true
-            recorder.status = "无法自动返回，请使用系统左上角入口或底部手势"
-            recorder.publishCurrentSnapshot()
+        guard responseSent else {
+            failPendingReturnAttempt(detail: "response_rejected")
+            return
         }
+
+        Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 1_500_000_000)
+            } catch {
+                return
+            }
+
+            guard pendingReturnAttemptID == attemptID,
+                  scenePhase != .background else {
+                return
+            }
+            failPendingReturnAttempt(detail: "background_transition_timeout")
+        }
+    }
+
+    @MainActor
+    private func refreshSystemReturnActionReadiness() async {
+        guard showsManualReturnGuidance else {
+            systemReturnActionIsReady = false
+            return
+        }
+
+        for _ in 0..<30 {
+            guard !Task.isCancelled,
+                  showsManualReturnGuidance,
+                  pendingReturnAttemptID == nil else {
+                return
+            }
+
+            if SystemNavigationReturnAction.isAvailable() {
+                systemReturnActionIsReady = true
+                manualReturnNeedsSystemFallback = false
+                RecordingLaunchMetrics.mark(
+                    "main_manual_return_action_ready",
+                    request: activeLaunchRequest
+                )
+                return
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                return
+            }
+        }
+
+        guard showsManualReturnGuidance,
+              pendingReturnAttemptID == nil else {
+            return
+        }
+        systemReturnActionIsReady = false
+        manualReturnNeedsSystemFallback = true
+        RecordingLaunchMetrics.mark(
+            "main_manual_return_action_unavailable",
+            request: activeLaunchRequest
+        )
+    }
+
+    private func failPendingReturnAttempt(detail: String) {
+        guard pendingReturnAttemptID != nil else {
+            return
+        }
+
+        pendingReturnAttemptID = nil
+        systemReturnActionIsReady = false
+        manualReturnNeedsSystemFallback = true
+        recorder.status = "无法自动返回，请使用系统左上角入口或底部手势"
+        recorder.publishCurrentSnapshot()
+        RecordingLaunchMetrics.mark(
+            "main_manual_return_failed",
+            request: activeLaunchRequest,
+            detail: detail
+        )
     }
 
     private func requiresManualReturn(from url: URL) -> Bool {
@@ -849,9 +1028,39 @@ private let sharedRecordingRequestNotificationCallback: CFNotificationCallback =
 // keyboard host, open an arbitrary bundle identifier, or modify keyboard state.
 private enum SystemNavigationReturnAction {
     @MainActor
+    static func isAvailable() -> Bool {
+        resolvedAction() != nil
+    }
+
+    @MainActor
     static func perform() -> Bool {
-        guard let action = action(from: UIApplication.shared) else {
+        guard let resolvedAction = resolvedAction() else {
             return false
+        }
+
+        let responseSelector = NSSelectorFromString(
+            "sendResponseForDestination:"
+        )
+        typealias SendResponseImplementation = @convention(c) (
+            AnyObject,
+            Selector,
+            UInt
+        ) -> Bool
+        let sendResponse = unsafeBitCast(
+            resolvedAction.action.method(for: responseSelector),
+            to: SendResponseImplementation.self
+        )
+        return sendResponse(
+            resolvedAction.action,
+            responseSelector,
+            resolvedAction.destination
+        )
+    }
+
+    @MainActor
+    private static func resolvedAction() -> (action: NSObject, destination: UInt)? {
+        guard let action = action(from: UIApplication.shared) else {
+            return nil
         }
 
         let canSendSelector = NSSelectorFromString("canSendResponse")
@@ -865,39 +1074,23 @@ private enum SystemNavigationReturnAction {
                 to: CanSendImplementation.self
             )
             guard canSend(action, canSendSelector) else {
-                return false
+                return nil
             }
         }
 
         let destinationsSelector = NSSelectorFromString("destinations")
-        guard action.responds(to: destinationsSelector),
-              let destinations = action.perform(destinationsSelector)?
-                .takeUnretainedValue() as? NSArray,
-              let firstDestination = destinations.firstObject as? NSNumber else {
-            return false
-        }
-
         let responseSelector = NSSelectorFromString(
             "sendResponseForDestination:"
         )
-        guard action.responds(to: responseSelector) else {
-            return false
+        guard action.responds(to: destinationsSelector),
+              action.responds(to: responseSelector),
+              let destinations = action.perform(destinationsSelector)?
+                .takeUnretainedValue() as? NSArray,
+              let firstDestination = destinations.firstObject as? NSNumber else {
+            return nil
         }
 
-        typealias SendResponseImplementation = @convention(c) (
-            AnyObject,
-            Selector,
-            UInt
-        ) -> Bool
-        let sendResponse = unsafeBitCast(
-            action.method(for: responseSelector),
-            to: SendResponseImplementation.self
-        )
-        return sendResponse(
-            action,
-            responseSelector,
-            firstDestination.uintValue
-        )
+        return (action, firstDestination.uintValue)
     }
 
     @MainActor

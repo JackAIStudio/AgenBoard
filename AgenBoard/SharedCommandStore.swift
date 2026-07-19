@@ -17,10 +17,31 @@ struct SharedRecognitionResult {
     let createdAt: TimeInterval
 }
 
+enum SharedRecordingCommand: String {
+    case start
+    case stop
+}
+
 struct SharedRecordingToggleRequest {
     let id: String
     let requestedAt: TimeInterval
     let requiresForegroundRoundTrip: Bool
+    let command: SharedRecordingCommand
+}
+
+enum SharedRecordingRequestPhase: String {
+    case accepted
+    case recording
+    case stopped
+    case failed
+}
+
+struct SharedRecordingRequestResponse {
+    let requestID: String
+    let command: SharedRecordingCommand
+    let phase: SharedRecordingRequestPhase
+    let message: String
+    let updatedAt: TimeInterval
 }
 
 enum RecordingLaunchMetrics {
@@ -108,7 +129,13 @@ enum SharedCommandStore {
     private static let recordingToggleRequestedAtKey = "recordingToggleRequestedAt"
     private static let recordingToggleRequiresForegroundRoundTripKey =
         "recordingToggleRequiresForegroundRoundTrip"
+    private static let recordingCommandKey = "recordingCommand"
     private static let recordingToggleHandledRequestIDKey = "recordingToggleHandledRequestID"
+    private static let recordingResponseRequestIDKey = "recordingResponseRequestID"
+    private static let recordingResponseCommandKey = "recordingResponseCommand"
+    private static let recordingResponsePhaseKey = "recordingResponsePhase"
+    private static let recordingResponseMessageKey = "recordingResponseMessage"
+    private static let recordingResponseUpdatedAtKey = "recordingResponseUpdatedAt"
     private static let recordingIsActiveKey = "recordingIsActive"
     private static let recordingIsTranscribingKey = "recordingIsTranscribing"
     private static let recordingAudioLevelKey = "recordingAudioLevel"
@@ -284,7 +311,8 @@ enum SharedCommandStore {
     }
 
     @discardableResult
-    static func requestRecordingToggle(
+    static func requestRecordingCommand(
+        _ command: SharedRecordingCommand,
         requiresForegroundRoundTrip: Bool = true
     ) -> SharedRecordingToggleRequest? {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
@@ -295,7 +323,8 @@ enum SharedCommandStore {
         let request = SharedRecordingToggleRequest(
             id: UUID().uuidString,
             requestedAt: requestedAt,
-            requiresForegroundRoundTrip: requiresForegroundRoundTrip
+            requiresForegroundRoundTrip: requiresForegroundRoundTrip,
+            command: command
         )
         defaults.set(request.id, forKey: recordingToggleRequestIDKey)
         defaults.set(requestedAt, forKey: recordingToggleRequestedAtKey)
@@ -303,6 +332,12 @@ enum SharedCommandStore {
             requiresForegroundRoundTrip,
             forKey: recordingToggleRequiresForegroundRoundTripKey
         )
+        defaults.set(command.rawValue, forKey: recordingCommandKey)
+        defaults.removeObject(forKey: recordingResponseRequestIDKey)
+        defaults.removeObject(forKey: recordingResponseCommandKey)
+        defaults.removeObject(forKey: recordingResponsePhaseKey)
+        defaults.removeObject(forKey: recordingResponseMessageKey)
+        defaults.removeObject(forKey: recordingResponseUpdatedAtKey)
         defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
         defaults.set(true, forKey: keyboardAutoInsertPendingKey)
         // synchronize() only asks CFPreferences to flush pending changes. Its
@@ -332,7 +367,10 @@ enum SharedCommandStore {
             requestedAt: defaults.double(forKey: recordingToggleRequestedAtKey),
             requiresForegroundRoundTrip: defaults.bool(
                 forKey: recordingToggleRequiresForegroundRoundTripKey
-            )
+            ),
+            command: SharedRecordingCommand(
+                rawValue: defaults.string(forKey: recordingCommandKey) ?? ""
+            ) ?? .start
         )
     }
 
@@ -348,6 +386,42 @@ enum SharedCommandStore {
 
         defaults.set(id, forKey: recordingToggleHandledRequestIDKey)
         defaults.synchronize()
+    }
+
+    static func updateRecordingRequestResponse(
+        for request: SharedRecordingToggleRequest,
+        phase: SharedRecordingRequestPhase,
+        message: String = ""
+    ) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(request.id, forKey: recordingResponseRequestIDKey)
+        defaults.set(request.command.rawValue, forKey: recordingResponseCommandKey)
+        defaults.set(phase.rawValue, forKey: recordingResponsePhaseKey)
+        defaults.set(message, forKey: recordingResponseMessageKey)
+        defaults.set(Date().timeIntervalSince1970, forKey: recordingResponseUpdatedAtKey)
+        defaults.synchronize()
+    }
+
+    static func latestRecordingRequestResponse() -> SharedRecordingRequestResponse? {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+              let requestID = defaults.string(forKey: recordingResponseRequestIDKey),
+              let commandRawValue = defaults.string(forKey: recordingResponseCommandKey),
+              let command = SharedRecordingCommand(rawValue: commandRawValue),
+              let phaseRawValue = defaults.string(forKey: recordingResponsePhaseKey),
+              let phase = SharedRecordingRequestPhase(rawValue: phaseRawValue) else {
+            return nil
+        }
+
+        return SharedRecordingRequestResponse(
+            requestID: requestID,
+            command: command,
+            phase: phase,
+            message: defaults.string(forKey: recordingResponseMessageKey) ?? "",
+            updatedAt: defaults.double(forKey: recordingResponseUpdatedAtKey)
+        )
     }
 
     static func latestKeyboardAutoInsertRequestedAt() -> TimeInterval {
