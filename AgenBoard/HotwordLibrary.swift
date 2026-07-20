@@ -98,14 +98,8 @@ enum HotwordLibraryStorage {
     private static let maximumTermLength = 128
     private static let initialTerms = [
         "AgenBoard",
-        "OpenClaw",
-        "Claude Code",
-        "Codex",
-        "Hermes",
-        "斜杠 new",
-        "斜杠 start",
-        "/new",
-        "/start"
+        "语音输入",
+        "快捷短语"
     ]
 
     private struct StoredLibrary: Codable {

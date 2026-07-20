@@ -122,24 +122,14 @@ enum SharedCommandStore {
     static let maximumKeyboardQuickPhraseCount = 6
     static let defaultQuickPhrases = [
         SharedQuickPhrase(
-            title: "测试文本",
-            content: "AgenBoard 输入法测试",
+            title: "你好",
+            content: "你好，很高兴认识你！",
             createdAt: Date(timeIntervalSince1970: 0)
         ),
         SharedQuickPhrase(
-            title: "/new",
-            content: "/new",
+            title: "稍后回复",
+            content: "我现在不方便，稍后回复你。",
             createdAt: Date(timeIntervalSince1970: 1)
-        ),
-        SharedQuickPhrase(
-            title: "/start",
-            content: "/start",
-            createdAt: Date(timeIntervalSince1970: 2)
-        ),
-        SharedQuickPhrase(
-            title: "Claude Code",
-            content: "Claude Code",
-            createdAt: Date(timeIntervalSince1970: 3)
         )
     ]
 

@@ -246,7 +246,7 @@ struct QuickPhraseLibraryView: View {
             }
         }
         .confirmationDialog(
-            "恢复内置的测试文本、/new、/start 和 Claude Code？",
+            "恢复内置的“你好”和“稍后回复”两条示例短语？",
             isPresented: $showsResetConfirmation,
             titleVisibility: .visible
         ) {
