@@ -8,6 +8,11 @@ private enum ReturnAttemptStage: String {
     case knownURLScheme
 }
 
+private enum ReturnAttemptTrigger: String {
+    case automatic
+    case manual
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recorder: SpeechRecorder
@@ -37,6 +42,8 @@ struct ContentView: View {
     @State private var manualReturnNeedsSystemFallback = false
     @State private var systemReturnActionIsReady = false
     @State private var pendingReturnAttemptID: UUID?
+    @State private var scheduledAutomaticReturnRequestID: String?
+    @State private var returnAttemptedRequestIDs: Set<String> = []
     @State private var showsQuickPhraseLibrary = false
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
@@ -57,7 +64,9 @@ struct ContentView: View {
     }
 
     private var canReturnToPreviousInterface: Bool {
-        hasCallableReturnTarget && pendingReturnAttemptID == nil
+        hasCallableReturnTarget
+            && pendingReturnAttemptID == nil
+            && scheduledAutomaticReturnRequestID == nil
     }
 
     private var returnHostBundleIdentifier: String? {
@@ -70,6 +79,33 @@ struct ContentView: View {
 
     private var hasCallableReturnTarget: Bool {
         systemReturnActionIsReady || returnHostBundleIdentifier != nil
+    }
+
+    private var returnGuidanceText: String {
+        if manualReturnNeedsSystemFallback {
+            return "系统没有提供可调用的返回目标，请点屏幕左上角的小字返回；若来自主屏幕或 Spotlight，请使用系统手势。"
+        }
+        if pendingReturnAttemptID != nil {
+            return "已请求系统返回，正在等待切换到刚才的 App…"
+        }
+        if scheduledAutomaticReturnRequestID != nil {
+            return "录音和画中画已准备，正在自动返回刚才的 App…"
+        }
+        if activeLaunchRequest?.sourceHost?.canOpenApplication == false {
+            return "当前来源属于系统界面，不会自动返回；请使用左上角入口或系统手势。"
+        }
+        if let request = activeLaunchRequest,
+           request.sourceHost?.canOpenApplication == true,
+           !returnAttemptedRequestIDs.contains(request.id) {
+            return "录音和画中画准备完成后将自动返回刚才的 App。"
+        }
+        if canReturnToPreviousInterface {
+            return "自动返回未完成时，可点击下面的大按钮回到刚才的 App。"
+        }
+        if !hasCallableReturnTarget {
+            return "正在识别刚才的 App 和系统返回入口…"
+        }
+        return "录音和画中画准备完成后，返回按钮会自动可用。"
     }
 
     private var sourceHostStatusText: String {
@@ -140,17 +176,7 @@ struct ContentView: View {
                                         .textSelection(.enabled)
                                 }
 
-                                Text(
-                                    manualReturnNeedsSystemFallback
-                                        ? "系统没有提供可调用的返回目标，请点屏幕左上角的小字返回；若来自主屏幕或 Spotlight，请使用系统手势。"
-                                        : pendingReturnAttemptID != nil
-                                            ? "已请求系统返回，正在等待切换到刚才的 App…"
-                                        : canReturnToPreviousInterface
-                                            ? "点击下面的大按钮回到刚才的 App，录音会继续。"
-                                            : !hasCallableReturnTarget
-                                                ? "正在识别刚才的 App 和系统返回入口…"
-                                                : "录音和画中画准备完成后，返回按钮会自动可用。"
-                                )
+                                Text(returnGuidanceText)
                                 .font(.subheadline)
 
                                 Button {
@@ -650,6 +676,7 @@ struct ContentView: View {
                     systemReturnActionIsReady = false
                 }
             }
+            scheduleAutomaticReturnIfReady()
         }
         .onChange(of: recorder.isTranscribing) { _, isTranscribing in
             if !isTranscribing {
@@ -667,6 +694,7 @@ struct ContentView: View {
                     : "main_background_recording_unavailable",
                 request: activeLaunchRequest
             )
+            scheduleAutomaticReturnIfReady()
         }
         .onChange(of: pip.isPreparedForBackgroundTransition) { _, _ in
             if pip.isPreparedForBackgroundTransition {
@@ -675,6 +703,7 @@ struct ContentView: View {
                     request: activeLaunchRequest
                 )
             }
+            scheduleAutomaticReturnIfReady()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -688,6 +717,7 @@ struct ContentView: View {
                 }
                 handleLatestSharedRecordingRequest()
                 startQueuedRecordingIfReady()
+                scheduleAutomaticReturnIfReady()
                 return
             }
 
@@ -699,6 +729,7 @@ struct ContentView: View {
                     )
                 }
                 pendingReturnAttemptID = nil
+                scheduledAutomaticReturnRequestID = nil
                 showsManualReturnGuidance = false
                 manualReturnNeedsSystemFallback = false
                 systemReturnActionIsReady = false
@@ -963,6 +994,7 @@ struct ContentView: View {
                         (sourceHost.capturedAt - request.requestedAt) * 1_000
                     )
                 )
+                scheduleAutomaticReturnIfReady()
             }
 
             let response = SharedCommandStore.latestRecordingRequestResponse()
@@ -1060,6 +1092,7 @@ struct ContentView: View {
                 phase: .stopped
             )
         }
+        scheduleAutomaticReturnIfReady()
     }
 
     private func startQueuedRecordingIfReady() {
@@ -1088,13 +1121,79 @@ struct ContentView: View {
         recorder.startRecordingIfNeeded(request: request)
     }
 
-    private func returnToPreviousInterface() {
+    private func scheduleAutomaticReturnIfReady() {
+        // System surfaces can expose navigation entries without being
+        // launchable apps. Only automate the round trip for a captured host
+        // that passed SharedCommandStore's returnable-application filter.
+        guard scenePhase == .active,
+              showsManualReturnGuidance,
+              pendingReturnAttemptID == nil,
+              scheduledAutomaticReturnRequestID == nil,
+              let request = activeLaunchRequest,
+              request.command == .start,
+              request.requiresForegroundRoundTrip,
+              request.sourceHost?.canOpenApplication == true,
+              !returnAttemptedRequestIDs.contains(request.id),
+              recorder.isRecording,
+              pip.isPictureInPictureActive
+                || pip.isPreparedForBackgroundTransition else {
+            return
+        }
+
+        let requestID = request.id
+        scheduledAutomaticReturnRequestID = requestID
+        RecordingLaunchMetrics.mark(
+            "main_automatic_return_scheduled",
+            request: request,
+            detail: request.sourceHost?.bundleIdentifier ?? "host_unavailable"
+        )
+
+        Task { @MainActor in
+            do {
+                // Keep the short settling delay used by the previously working
+                // branch so UIKit and AVKit can finish their state updates.
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                if scheduledAutomaticReturnRequestID == requestID {
+                    scheduledAutomaticReturnRequestID = nil
+                }
+                return
+            }
+
+            guard scheduledAutomaticReturnRequestID == requestID else {
+                return
+            }
+            scheduledAutomaticReturnRequestID = nil
+
+            guard scenePhase == .active,
+                  pendingReturnAttemptID == nil,
+                  activeLaunchRequest?.id == requestID,
+                  activeLaunchRequest?.sourceHost?.canOpenApplication == true,
+                  !returnAttemptedRequestIDs.contains(requestID),
+                  recorder.isRecording,
+                  pip.isPictureInPictureActive
+                    || pip.isPreparedForBackgroundTransition else {
+                return
+            }
+
+            returnToPreviousInterface(trigger: .automatic)
+        }
+    }
+
+    private func returnToPreviousInterface(
+        trigger: ReturnAttemptTrigger = .manual
+    ) {
         guard canReturnToPreviousInterface else {
             return
         }
 
+        if let requestID = activeLaunchRequest?.id {
+            returnAttemptedRequestIDs.insert(requestID)
+        }
         RecordingLaunchMetrics.mark(
-            "main_manual_return_button_tapped",
+            trigger == .automatic
+                ? "main_automatic_return_started"
+                : "main_manual_return_button_tapped",
             request: activeLaunchRequest
         )
         let attemptID = UUID()
@@ -1102,8 +1201,8 @@ struct ContentView: View {
         let responseSent = SystemNavigationReturnAction.perform()
         RecordingLaunchMetrics.mark(
             responseSent
-                ? "main_manual_return_response_sent"
-                : "main_manual_return_response_rejected",
+                ? "main_\(trigger.rawValue)_return_response_sent"
+                : "main_\(trigger.rawValue)_return_response_rejected",
             request: activeLaunchRequest
         )
 
