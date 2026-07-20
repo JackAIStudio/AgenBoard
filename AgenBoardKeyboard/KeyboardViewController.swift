@@ -115,6 +115,10 @@ final class KeyboardViewController: UIInputViewController,
     private var appLaunchRequestedAt: TimeInterval?
     private var appOpenVerificationTask: Task<Void, Never>?
     private var recordingCommandFallbackTask: Task<Void, Never>?
+    private var hostCaptureTask: Task<Void, Never>?
+    private var hostPrefetchTask: Task<Void, Never>?
+    private var hostPresentationStartedAt: TimeInterval?
+    private var presentationHostCapture: SharedKeyboardHostCapture?
     private var launchFailureMessage: String?
     private var launchFailureMessageUntil: TimeInterval = 0
     private var hasStartedPinyinWarmup = false
@@ -146,6 +150,7 @@ final class KeyboardViewController: UIInputViewController,
         hapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
         refreshQuickPhraseModuleVisibility()
         reloadPhraseModule()
+        prepareHostCaptureForCurrentPresentation()
         startSnapshotTimer()
     }
 
@@ -155,6 +160,11 @@ final class KeyboardViewController: UIInputViewController,
         stopDeleting()
         recordingCommandFallbackTask?.cancel()
         recordingCommandFallbackTask = nil
+        hostCaptureTask?.cancel()
+        hostCaptureTask = nil
+        hostPrefetchTask?.cancel()
+        hostPrefetchTask = nil
+        finishHostCaptureForCurrentPresentation()
         stopSnapshotTimer()
     }
 
@@ -1558,7 +1568,8 @@ final class KeyboardViewController: UIInputViewController,
     }
 
     @objc private func toggleRecording() {
-        guard recordingCommandFallbackTask == nil else {
+        guard recordingCommandFallbackTask == nil,
+              hostCaptureTask == nil else {
             return
         }
 
@@ -1630,15 +1641,275 @@ final class KeyboardViewController: UIInputViewController,
             "cold_app_manual_round_trip_started",
             detail: diagnosticState
         )
+        statusLabel.text = "正在识别刚才的 App..."
+        hostCaptureTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
 
+            let sourceHost = await self.captureHostForCurrentRecordingTap()
+            guard !Task.isCancelled else {
+                self.hostCaptureTask = nil
+                return
+            }
+
+            if let sourceHost {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_bundle_captured_for_request",
+                    detail: "bundle=\(sourceHost.bundleIdentifier) generation=\(sourceHost.generation) kind=\(sourceHost.kind.rawValue)"
+                )
+            } else {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_bundle_capture_timed_out",
+                    detail: "single_refresh"
+                )
+            }
+
+            self.persistColdRecordingRequest(
+                sourceHost: sourceHost,
+                fallbackRequestedAt: now
+            )
+            self.hostCaptureTask = nil
+        }
+    }
+
+    @MainActor
+    private func captureHostForCurrentRecordingTap() async -> SharedKeyboardHostCapture? {
+        if let presentationHostCapture {
+            SharedCommandStore.markKeyboardHostCaptureConsumed(
+                presentationHostCapture
+            )
+            return presentationHostCapture
+        }
+
+        guard let presentationStartedAt = hostPresentationStartedAt else {
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_capture_attempt_missing",
+                detail: "view_did_appear_not_prepared"
+            )
+            return nil
+        }
+
+        // If the user taps quickly, let the already-running presentation
+        // prefetch finish instead of starting a competing refresh sequence.
+        if let prefetchTask = hostPrefetchTask {
+            await prefetchTask.value
+            hostPrefetchTask = nil
+            if let presentationHostCapture {
+                SharedCommandStore.markKeyboardHostCaptureConsumed(
+                    presentationHostCapture
+                )
+                return presentationHostCapture
+            }
+        }
+
+        if let capture = consumeLatestHostCapture(
+            presentationStartedAt: presentationStartedAt
+        ) {
+            return capture
+        }
+
+        // The old working branch used a refresh burst while the keyboard was
+        // visible. Keep a shorter final burst for a tap that raced presentation.
+        if #available(iOS 26.4, *) {
+            for attempt in 1...6 {
+                let didRequestRefresh = refreshHostBundleIdentifierUsingArbiterOnce()
+                if let capture = consumeLatestHostCapture(
+                    presentationStartedAt: presentationStartedAt
+                ) {
+                    SharedCommandStore.recordKeyboardDiagnostic(
+                        "host_capture_tap_refresh_ready",
+                        detail: "attempt=\(attempt) bundle=\(capture.bundleIdentifier)"
+                    )
+                    return capture
+                }
+
+                guard didRequestRefresh else {
+                    break
+                }
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    return nil
+                }
+            }
+        }
+        return nil
+    }
+
+    private func prepareHostCaptureForCurrentPresentation() {
+        guard hostPresentationStartedAt == nil else {
+            return
+        }
+
+        let presentationStartedAt = Date().timeIntervalSince1970
+        hostPresentationStartedAt = presentationStartedAt
+        presentationHostCapture = nil
+
+        // +load may receive the destination before viewDidAppear. Preserve and
+        // consume that fresh callback instead of deleting it here.
+        if let capture = SharedCommandStore.latestUnconsumedKeyboardHostCapture(
+            presentationStartedAt: presentationStartedAt
+        ) {
+            presentationHostCapture = capture
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_bundle_captured_before_view_did_appear",
+                detail: "bundle=\(capture.bundleIdentifier) generation=\(capture.generation)"
+            )
+            return
+        }
+
+        if #available(iOS 26.4, *) {
+            startHostCapturePrefetch(
+                presentationStartedAt: presentationStartedAt
+            )
+            return
+        }
+
+        guard let bundleIdentifier = LegacyKeyboardHostResolver.resolve(from: self) else {
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_bundle_capture_failed",
+                detail: "legacy resolver returned nil"
+            )
+            return
+        }
+        presentationHostCapture = SharedKeyboardHostCapture(
+            bundleIdentifier: bundleIdentifier,
+            capturedAt: Date().timeIntervalSince1970,
+            generation: UUID().uuidString,
+            kind: SharedCommandStore.hostKind(for: bundleIdentifier)
+        )
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "host_bundle_captured",
+            detail: bundleIdentifier
+        )
+    }
+
+    private func startHostCapturePrefetch(
+        presentationStartedAt: TimeInterval
+    ) {
+        hostPrefetchTask?.cancel()
+        hostPrefetchTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            // Preserve the exact retry budget of the previously working branch
+            // for this A/B test. It stops immediately when a callback arrives.
+            for attempt in 1...10 {
+                guard !Task.isCancelled,
+                      self.hostPresentationStartedAt == presentationStartedAt else {
+                    return
+                }
+
+                let didRequestRefresh = self.refreshHostBundleIdentifierUsingArbiterOnce()
+
+                if let capture = self.consumeLatestHostCapture(
+                    presentationStartedAt: presentationStartedAt
+                ) {
+                    SharedCommandStore.recordKeyboardDiagnostic(
+                        "host_capture_prefetch_ready",
+                        detail: "attempt=\(attempt) bundle=\(capture.bundleIdentifier)"
+                    )
+                    self.hostPrefetchTask = nil
+                    return
+                }
+
+                guard didRequestRefresh else {
+                    break
+                }
+                do {
+                    try await Task.sleep(nanoseconds: 75_000_000)
+                } catch {
+                    return
+                }
+            }
+
+            if let capture = self.consumeLatestHostCapture(
+                presentationStartedAt: presentationStartedAt
+            ) {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_capture_prefetch_ready",
+                    detail: "attempt=final bundle=\(capture.bundleIdentifier)"
+                )
+            } else {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_capture_prefetch_timed_out",
+                    detail: "attempts=10"
+                )
+            }
+            self.hostPrefetchTask = nil
+        }
+    }
+
+    private func finishHostCaptureForCurrentPresentation() {
+        if let presentationHostCapture {
+            SharedCommandStore.markKeyboardHostCaptureConsumed(
+                presentationHostCapture
+            )
+        }
+        if let hostPresentationStartedAt,
+           let lateCapture = SharedCommandStore.latestUnconsumedKeyboardHostCapture(
+               presentationStartedAt: hostPresentationStartedAt
+           ) {
+            // Even when no recording was requested, do not leak a callback from
+            // this presentation into the next host application.
+            SharedCommandStore.markKeyboardHostCaptureConsumed(lateCapture)
+        }
+        hostPresentationStartedAt = nil
+        presentationHostCapture = nil
+    }
+
+    private func consumeLatestHostCapture(
+        presentationStartedAt: TimeInterval
+    ) -> SharedKeyboardHostCapture? {
+        guard let capture = SharedCommandStore.latestUnconsumedKeyboardHostCapture(
+            presentationStartedAt: presentationStartedAt
+        ) else {
+            return nil
+        }
+
+        presentationHostCapture = capture
+        SharedCommandStore.markKeyboardHostCaptureConsumed(capture)
+        return capture
+    }
+
+    private func refreshHostBundleIdentifierUsingArbiterOnce() -> Bool {
+        let selector = NSSelectorFromString("refreshHostBundleIdentifierOnce")
+        guard let trackerClass = NSClassFromString("KeyboardHostTracker"),
+              let method = class_getClassMethod(trackerClass, selector) else {
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_tracker_refresh_unavailable",
+                detail: "class_or_selector_missing"
+            )
+            return false
+        }
+
+        typealias RefreshImplementation = @convention(c) (
+            AnyObject,
+            Selector
+        ) -> Void
+        let refresh = unsafeBitCast(
+            method_getImplementation(method),
+            to: RefreshImplementation.self
+        )
+        refresh(trackerClass, selector)
+        return true
+    }
+
+    private func persistColdRecordingRequest(
+        sourceHost: SharedKeyboardHostCapture?,
+        fallbackRequestedAt: TimeInterval
+    ) {
         if let request = SharedCommandStore.requestRecordingCommand(
             .start,
-            requiresForegroundRoundTrip: true
+            requiresForegroundRoundTrip: true,
+            sourceHost: sourceHost
         ) {
             RecordingLaunchMetrics.mark(
                 "keyboard_cold_request_persisted",
                 request: request,
-                detail: "manual_return"
+                detail: sourceHost?.bundleIdentifier ?? "host_unavailable"
             )
             appLaunchRequestedAt = request.requestedAt
             statusLabel.text = "正在打开 AgenBoard 并启动录音..."
@@ -1648,7 +1919,7 @@ final class KeyboardViewController: UIInputViewController,
                 request: request
             )
         } else {
-            appLaunchRequestedAt = now
+            appLaunchRequestedAt = fallbackRequestedAt
             statusLabel.text = "共享通道不可用，正在打开 AgenBoard..."
             openContainingApp(
                 URL(string: "agenboard://record?manualReturn=1&command=start"),
@@ -1688,6 +1959,7 @@ final class KeyboardViewController: UIInputViewController,
         let shouldShowLaunchFailure = now < launchFailureMessageUntil
         let isLaunchingApp = appLaunchRequestedAt.map { now - $0 < 8 } ?? false
         let isAwaitingRecordingCommand = recordingCommandFallbackTask != nil
+            || hostCaptureTask != nil
         let snapshotError = isFresh ? voiceErrorMessage(from: snapshot.status) : nil
 
         if isFresh {
@@ -1824,6 +2096,22 @@ final class KeyboardViewController: UIInputViewController,
             URLQueryItem(name: "command", value: request.command.rawValue),
             URLQueryItem(name: "manualReturn", value: "1")
         ]
+        if let sourceHost = request.sourceHost {
+            components.queryItems?.append(contentsOf: [
+                URLQueryItem(
+                    name: "sourceHostBundleIdentifier",
+                    value: sourceHost.bundleIdentifier
+                ),
+                URLQueryItem(
+                    name: "sourceHostCapturedAt",
+                    value: String(sourceHost.capturedAt)
+                ),
+                URLQueryItem(
+                    name: "sourceHostGeneration",
+                    value: sourceHost.generation
+                )
+            ])
+        }
         return components.url
     }
 

@@ -2,6 +2,12 @@ import SwiftUI
 import UIKit
 import ObjectiveC.runtime
 
+private enum ReturnAttemptStage: String {
+    case systemNavigation
+    case hostApplication
+    case knownURLScheme
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recorder: SpeechRecorder
@@ -45,10 +51,40 @@ struct ContentView: View {
 
     private var canReturnToPreviousInterface: Bool {
         recorder.isRecording
-            && systemReturnActionIsReady
+            && hasCallableReturnTarget
             && pendingReturnAttemptID == nil
             && (pip.isPictureInPictureActive
                 || pip.isPreparedForBackgroundTransition)
+    }
+
+    private var returnHostBundleIdentifier: String? {
+        guard let sourceHost = activeLaunchRequest?.sourceHost,
+              sourceHost.canOpenApplication else {
+            return nil
+        }
+        return sourceHost.bundleIdentifier
+    }
+
+    private var hasCallableReturnTarget: Bool {
+        systemReturnActionIsReady || returnHostBundleIdentifier != nil
+    }
+
+    private var sourceHostStatusText: String {
+        guard let sourceHost = activeLaunchRequest?.sourceHost else {
+            return "尚未识别来源 App（sourceHost = nil）"
+        }
+
+        let displayName: String
+        switch sourceHost.bundleIdentifier.lowercased() {
+        case "md.obsidian":
+            displayName = "Obsidian"
+        case "com.xingin.discover":
+            displayName = "小红书"
+        default:
+            displayName = sourceHost.canOpenApplication ? "第三方 App" : "系统界面"
+        }
+        let suffix = sourceHost.canOpenApplication ? "" : "，不作为返回目标"
+        return "已识别来源：\(displayName)（\(sourceHost.bundleIdentifier)\(suffix)）"
     }
 
     init() {
@@ -79,6 +115,28 @@ struct ContentView: View {
                                 )
                                 .font(.headline)
 
+                                Label(
+                                    sourceHostStatusText,
+                                    systemImage: activeLaunchRequest?.sourceHost == nil
+                                        ? "questionmark.circle"
+                                        : activeLaunchRequest?.sourceHost?.canOpenApplication == true
+                                            ? "checkmark.circle.fill"
+                                            : "info.circle.fill"
+                                )
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(
+                                    activeLaunchRequest?.sourceHost?.canOpenApplication == true
+                                        ? Color.green
+                                        : Color.orange
+                                )
+
+                                if activeLaunchRequest?.sourceHost == nil {
+                                    Text(SharedCommandStore.keyboardHostDiagnosticSummary())
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+
                                 Text(
                                     manualReturnNeedsSystemFallback
                                         ? "系统没有提供可调用的返回目标，请点屏幕左上角的小字返回；若来自主屏幕或 Spotlight，请使用系统手势。"
@@ -86,8 +144,8 @@ struct ContentView: View {
                                             ? "已请求系统返回，正在等待切换到刚才的 App…"
                                         : canReturnToPreviousInterface
                                             ? "点击下面的大按钮回到刚才的 App，录音会继续。"
-                                            : !systemReturnActionIsReady
-                                                ? "正在等待系统返回入口…"
+                                            : !hasCallableReturnTarget
+                                                ? "正在识别刚才的 App 和系统返回入口…"
                                                 : "录音和画中画准备完成后，返回按钮会自动可用。"
                                 )
                                 .font(.subheadline)
@@ -724,6 +782,7 @@ struct ContentView: View {
         }
 
         let requiresForegroundRoundTrip = requiresManualReturn(from: url)
+        let urlSourceHost = sourceHostCapture(from: components)
 
         if let sharedRequest = SharedCommandStore.latestRecordingToggleRequest(),
            sharedRequest.id == requestID {
@@ -732,7 +791,8 @@ struct ContentView: View {
                 requestedAt: sharedRequest.requestedAt,
                 requiresForegroundRoundTrip: requiresForegroundRoundTrip
                     || sharedRequest.requiresForegroundRoundTrip,
-                command: sharedRequest.command
+                command: sharedRequest.command,
+                sourceHost: sharedRequest.sourceHost ?? urlSourceHost
             )
         }
 
@@ -745,7 +805,8 @@ struct ContentView: View {
                 id: requestID,
                 requestedAt: requestedAt,
                 requiresForegroundRoundTrip: requiresForegroundRoundTrip,
-                command: command
+                command: command,
+                sourceHost: urlSourceHost
             )
         }
 
@@ -753,7 +814,34 @@ struct ContentView: View {
             id: requestID,
             requestedAt: Date().timeIntervalSince1970,
             requiresForegroundRoundTrip: requiresForegroundRoundTrip,
-            command: command
+            command: command,
+            sourceHost: urlSourceHost
+        )
+    }
+
+    private func sourceHostCapture(
+        from components: URLComponents
+    ) -> SharedKeyboardHostCapture? {
+        let queryItems = components.queryItems ?? []
+        guard let bundleIdentifier = queryItems.first(
+            where: { $0.name == "sourceHostBundleIdentifier" }
+        )?.value,
+        let capturedAtValue = queryItems.first(
+            where: { $0.name == "sourceHostCapturedAt" }
+        )?.value,
+        let capturedAt = TimeInterval(capturedAtValue),
+        let generation = queryItems.first(
+            where: { $0.name == "sourceHostGeneration" }
+        )?.value,
+        !generation.isEmpty else {
+            return nil
+        }
+
+        return SharedKeyboardHostCapture(
+            bundleIdentifier: bundleIdentifier,
+            capturedAt: capturedAt,
+            generation: generation,
+            kind: SharedCommandStore.hostKind(for: bundleIdentifier)
         )
     }
 
@@ -779,6 +867,22 @@ struct ContentView: View {
         let wasAlreadyHandled = handledRecordingRequestIDs.contains(request.id)
             || request.id == SharedCommandStore.latestHandledRecordingToggleRequestID()
         if wasAlreadyHandled {
+            if activeLaunchRequest?.id == request.id,
+               activeLaunchRequest?.sourceHost == nil,
+               let sourceHost = request.sourceHost {
+                activeLaunchRequest = request
+                manualReturnNeedsSystemFallback = false
+                RecordingLaunchMetrics.mark(
+                    "main_late_host_capture_attached",
+                    request: request,
+                    detail: String(
+                        format: "bundle=%@ offset_ms=%.1f",
+                        sourceHost.bundleIdentifier,
+                        (sourceHost.capturedAt - request.requestedAt) * 1_000
+                    )
+                )
+            }
+
             let response = SharedCommandStore.latestRecordingRequestResponse()
             let canRetryFailedStart = allowsForegroundRetry
                 && scenePhase == .active
@@ -890,10 +994,95 @@ struct ContentView: View {
         )
 
         guard responseSent else {
-            failPendingReturnAttempt(detail: "response_rejected")
+            attemptHostApplicationReturn(
+                attemptID: attemptID,
+                reason: SystemNavigationReturnAction.diagnosticDetail()
+            )
             return
         }
 
+        scheduleReturnVerification(
+            attemptID: attemptID,
+            stage: .systemNavigation
+        )
+    }
+
+    private func attemptHostApplicationReturn(
+        attemptID: UUID,
+        reason: String
+    ) {
+        guard pendingReturnAttemptID == attemptID,
+              let bundleIdentifier = returnHostBundleIdentifier else {
+            failPendingReturnAttempt(detail: "host_unavailable_after_\(reason)")
+            return
+        }
+
+        let didOpen = HostApplicationReturnAction.openApplication(
+            bundleIdentifier: bundleIdentifier
+        )
+        RecordingLaunchMetrics.mark(
+            didOpen
+                ? "main_host_application_return_requested"
+                : "main_host_application_return_rejected",
+            request: activeLaunchRequest,
+            detail: "bundle=\(bundleIdentifier) reason=\(reason)"
+        )
+        guard didOpen else {
+            attemptKnownURLSchemeReturn(
+                attemptID: attemptID,
+                bundleIdentifier: bundleIdentifier,
+                reason: "bundle_open_rejected"
+            )
+            return
+        }
+
+        scheduleReturnVerification(
+            attemptID: attemptID,
+            stage: .hostApplication
+        )
+    }
+
+    private func attemptKnownURLSchemeReturn(
+        attemptID: UUID,
+        bundleIdentifier: String,
+        reason: String
+    ) {
+        guard pendingReturnAttemptID == attemptID,
+              let fallbackURL = HostApplicationReturnAction.knownURL(
+                for: bundleIdentifier
+              ) else {
+            failPendingReturnAttempt(detail: "url_scheme_unavailable_after_\(reason)")
+            return
+        }
+
+        UIApplication.shared.open(fallbackURL, options: [:]) { success in
+            Task { @MainActor in
+                guard pendingReturnAttemptID == attemptID else {
+                    return
+                }
+                RecordingLaunchMetrics.mark(
+                    success
+                        ? "main_host_url_return_requested"
+                        : "main_host_url_return_rejected",
+                    request: activeLaunchRequest,
+                    detail: "bundle=\(bundleIdentifier) url=\(fallbackURL.absoluteString)"
+                )
+                guard success else {
+                    failPendingReturnAttempt(detail: "url_scheme_rejected")
+                    return
+                }
+                scheduleReturnVerification(
+                    attemptID: attemptID,
+                    stage: .knownURLScheme
+                )
+            }
+        }
+    }
+
+    private func scheduleReturnVerification(
+        attemptID: UUID,
+        stage: ReturnAttemptStage
+    ) {
         Task { @MainActor in
             do {
                 try await Task.sleep(nanoseconds: 1_500_000_000)
@@ -905,7 +1094,26 @@ struct ContentView: View {
                   scenePhase != .background else {
                 return
             }
-            failPendingReturnAttempt(detail: "background_transition_timeout")
+
+            switch stage {
+            case .systemNavigation:
+                attemptHostApplicationReturn(
+                    attemptID: attemptID,
+                    reason: "system_background_transition_timeout"
+                )
+            case .hostApplication:
+                guard let bundleIdentifier = returnHostBundleIdentifier else {
+                    failPendingReturnAttempt(detail: "host_target_lost")
+                    return
+                }
+                attemptKnownURLSchemeReturn(
+                    attemptID: attemptID,
+                    bundleIdentifier: bundleIdentifier,
+                    reason: "bundle_background_transition_timeout"
+                )
+            case .knownURLScheme:
+                failPendingReturnAttempt(detail: "url_background_transition_timeout")
+            }
         }
     }
 
@@ -945,10 +1153,11 @@ struct ContentView: View {
             return
         }
         systemReturnActionIsReady = false
-        manualReturnNeedsSystemFallback = true
+        manualReturnNeedsSystemFallback = returnHostBundleIdentifier == nil
         RecordingLaunchMetrics.mark(
             "main_manual_return_action_unavailable",
-            request: activeLaunchRequest
+            request: activeLaunchRequest,
+            detail: SystemNavigationReturnAction.diagnosticDetail()
         )
     }
 
@@ -959,7 +1168,7 @@ struct ContentView: View {
 
         pendingReturnAttemptID = nil
         systemReturnActionIsReady = false
-        manualReturnNeedsSystemFallback = true
+        manualReturnNeedsSystemFallback = returnHostBundleIdentifier == nil
         recorder.status = "无法自动返回，请使用系统左上角入口或底部手势"
         recorder.publishCurrentSnapshot()
         RecordingLaunchMetrics.mark(
@@ -1058,6 +1267,46 @@ private enum SystemNavigationReturnAction {
     }
 
     @MainActor
+    static func diagnosticDetail() -> String {
+        guard let action = action(from: UIApplication.shared) else {
+            return "system_action_missing"
+        }
+
+        let canSendSelector = NSSelectorFromString("canSendResponse")
+        if action.responds(to: canSendSelector) {
+            typealias CanSendImplementation = @convention(c) (
+                AnyObject,
+                Selector
+            ) -> Bool
+            let canSend = unsafeBitCast(
+                action.method(for: canSendSelector),
+                to: CanSendImplementation.self
+            )
+            if !canSend(action, canSendSelector) {
+                return "system_action_cannot_send"
+            }
+        }
+
+        let destinationsSelector = NSSelectorFromString("destinations")
+        guard action.responds(to: destinationsSelector) else {
+            return "system_destinations_selector_missing"
+        }
+        guard let destinations = action.perform(destinationsSelector)?
+            .takeUnretainedValue() as? NSArray,
+            destinations.firstObject is NSNumber else {
+            return "system_destinations_empty"
+        }
+
+        let responseSelector = NSSelectorFromString(
+            "sendResponseForDestination:"
+        )
+        guard action.responds(to: responseSelector) else {
+            return "system_response_selector_missing"
+        }
+        return "system_action_ready"
+    }
+
+    @MainActor
     private static func resolvedAction() -> (action: NSObject, destination: UInt)? {
         guard let action = action(from: UIApplication.shared) else {
             return nil
@@ -1109,6 +1358,78 @@ private enum SystemNavigationReturnAction {
             return nil
         }
         return object_getIvar(application, actionVariable) as? NSObject
+    }
+}
+
+private enum HostApplicationReturnAction {
+    @MainActor
+    static func openApplication(bundleIdentifier: String) -> Bool {
+        guard SharedCommandStore.isReturnableHostBundleIdentifier(
+            bundleIdentifier
+        ) else {
+            return false
+        }
+
+        if NSClassFromString("LSApplicationWorkspace") == nil {
+            let frameworkPath =
+                "/System/Library/Frameworks/MobileCoreServices.framework"
+            _ = Bundle(path: frameworkPath)?.load()
+        }
+
+        let defaultWorkspaceSelector = NSSelectorFromString("defaultWorkspace")
+        guard let workspaceClass = NSClassFromString("LSApplicationWorkspace"),
+              let workspaceMethod = class_getClassMethod(
+                workspaceClass,
+                defaultWorkspaceSelector
+              ) else {
+            return false
+        }
+
+        typealias DefaultWorkspaceImplementation = @convention(c) (
+            AnyObject,
+            Selector
+        ) -> AnyObject?
+        let defaultWorkspace = unsafeBitCast(
+            method_getImplementation(workspaceMethod),
+            to: DefaultWorkspaceImplementation.self
+        )
+        guard let workspace = defaultWorkspace(
+            workspaceClass,
+            defaultWorkspaceSelector
+        ) as? NSObject else {
+            return false
+        }
+
+        let openSelector = NSSelectorFromString("openApplicationWithBundleID:")
+        guard workspace.responds(to: openSelector) else {
+            return false
+        }
+
+        typealias OpenApplicationImplementation = @convention(c) (
+            AnyObject,
+            Selector,
+            NSString
+        ) -> Bool
+        let openApplication = unsafeBitCast(
+            workspace.method(for: openSelector),
+            to: OpenApplicationImplementation.self
+        )
+        return openApplication(
+            workspace,
+            openSelector,
+            bundleIdentifier as NSString
+        )
+    }
+
+    static func knownURL(for bundleIdentifier: String) -> URL? {
+        switch bundleIdentifier.lowercased() {
+        case "md.obsidian":
+            return URL(string: "obsidian://")
+        case "com.xingin.discover":
+            return URL(string: "xhsdiscover://")
+        default:
+            return nil
+        }
     }
 }
 

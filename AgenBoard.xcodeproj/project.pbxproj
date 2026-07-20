@@ -34,6 +34,8 @@
 		537000012C90000100AB0001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 537000022C90000100AB0001 /* Assets.xcassets */; };
 		548000012CA0000100AB0001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 548000032CA0000100AB0001 /* PrivacyInfo.xcprivacy */; };
 		548000022CA0000100AB0001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 548000042CA0000100AB0001 /* PrivacyInfo.xcprivacy */; };
+		56A000012CC0000100AB0001 /* KeyboardHostTracker.m in Sources */ = {isa = PBXBuildFile; fileRef = 56A000032CC0000100AB0001 /* KeyboardHostTracker.m */; };
+		56A000022CC0000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -91,6 +93,8 @@
 		548000032CA0000100AB0001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		548000042CA0000100AB0001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		55A000012CB0000100AB0001 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		56A000032CC0000100AB0001 /* KeyboardHostTracker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KeyboardHostTracker.m; sourceTree = "<group>"; };
+		56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyKeyboardHostResolver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,6 +167,8 @@
 			isa = PBXGroup;
 			children = (
 				4B1000022C10000100AB0001 /* KeyboardViewController.swift */,
+				56A000032CC0000100AB0001 /* KeyboardHostTracker.m */,
+				56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */,
 				4B1000162C10000100AB0001 /* PinyinInputEngine.swift */,
 				4B2000022C20000100AB0001 /* RimePinyinEngine.swift */,
 				4B2000042C20000100AB0001 /* RimeData */,
@@ -319,6 +325,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */,
+				56A000012CC0000100AB0001 /* KeyboardHostTracker.m in Sources */,
+				56A000022CC0000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */,
 				4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */,
 				4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */,
 				4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */,

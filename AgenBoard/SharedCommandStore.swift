@@ -22,11 +22,28 @@ enum SharedRecordingCommand: String {
     case stop
 }
 
+enum SharedKeyboardHostKind: String {
+    case application
+    case systemInterface
+}
+
+struct SharedKeyboardHostCapture {
+    let bundleIdentifier: String
+    let capturedAt: TimeInterval
+    let generation: String
+    let kind: SharedKeyboardHostKind
+
+    var canOpenApplication: Bool {
+        kind == .application
+    }
+}
+
 struct SharedRecordingToggleRequest {
     let id: String
     let requestedAt: TimeInterval
     let requiresForegroundRoundTrip: Bool
     let command: SharedRecordingCommand
+    let sourceHost: SharedKeyboardHostCapture?
 }
 
 enum SharedRecordingRequestPhase: String {
@@ -130,6 +147,17 @@ enum SharedCommandStore {
     private static let recordingToggleRequiresForegroundRoundTripKey =
         "recordingToggleRequiresForegroundRoundTrip"
     private static let recordingCommandKey = "recordingCommand"
+    private static let recordingHostBundleIdentifierKey =
+        "recordingHostBundleIdentifier"
+    private static let recordingHostCapturedAtKey = "recordingHostCapturedAt"
+    private static let recordingHostGenerationKey = "recordingHostGeneration"
+    private static let keyboardHostBundleIdentifierKey =
+        "keyboardHostBundleIdentifier"
+    private static let keyboardHostCapturedAtKey =
+        "keyboardHostBundleIdentifierCapturedAt"
+    private static let keyboardHostGenerationKey = "keyboardHostCaptureGeneration"
+    private static let keyboardHostConsumedGenerationKey =
+        "keyboardHostLastConsumedCaptureGeneration"
     private static let recordingToggleHandledRequestIDKey = "recordingToggleHandledRequestID"
     private static let recordingResponseRequestIDKey = "recordingResponseRequestID"
     private static let recordingResponseCommandKey = "recordingResponseCommand"
@@ -310,10 +338,59 @@ enum SharedCommandStore {
         RecordingLaunchMetrics.mark(event, detail: detail)
     }
 
+    static func keyboardHostDiagnosticSummary() -> String {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return "Hook 诊断：App Group 不可用"
+        }
+
+        let installStatus = defaults.string(
+            forKey: "keyboardHostTrackerInstallStatus"
+        ) ?? "未安装"
+        let enabledStatus = defaults.string(
+            forKey: "keyboardHostTrackerEnabledOverride"
+        ) ?? "未启用"
+        let refreshStatus = defaults.string(
+            forKey: "keyboardHostTrackerRefreshStatus"
+        ) ?? "未刷新"
+        let lastValueClass = defaults.string(
+            forKey: "keyboardHostTrackerLastValueClass"
+        ) ?? "无回调"
+        let lastBundleIdentifier = defaults.string(
+            forKey: keyboardHostBundleIdentifierKey
+        )
+        let lastCapturedAt = defaults.double(forKey: keyboardHostCapturedAtKey)
+        let captureStatus: String
+        if let lastBundleIdentifier, lastCapturedAt > 0 {
+            let age = max(0, Date().timeIntervalSince1970 - lastCapturedAt)
+            let requestedAt = defaults.double(
+                forKey: recordingToggleRequestedAtKey
+            )
+            let requestTiming: String
+            if requestedAt > 0 {
+                let offset = lastCapturedAt - requestedAt
+                requestTiming = offset >= 0
+                    ? String(format: "，请求后 %.1f 秒", offset)
+                    : String(format: "，请求前 %.1f 秒", abs(offset))
+            } else {
+                requestTiming = ""
+            }
+            captureStatus = String(
+                format: "最近捕获：%@（%.1f 秒前%@）",
+                lastBundleIdentifier,
+                age,
+                requestTiming
+            )
+        } else {
+            captureStatus = "最近捕获：无"
+        }
+        return "\(captureStatus)；Hook：\(installStatus)；Arbiter：\(enabledStatus)；刷新：\(refreshStatus)；回调值：\(lastValueClass)"
+    }
+
     @discardableResult
     static func requestRecordingCommand(
         _ command: SharedRecordingCommand,
-        requiresForegroundRoundTrip: Bool = true
+        requiresForegroundRoundTrip: Bool = true,
+        sourceHost: SharedKeyboardHostCapture? = nil
     ) -> SharedRecordingToggleRequest? {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return nil
@@ -324,7 +401,8 @@ enum SharedCommandStore {
             id: UUID().uuidString,
             requestedAt: requestedAt,
             requiresForegroundRoundTrip: requiresForegroundRoundTrip,
-            command: command
+            command: command,
+            sourceHost: sourceHost
         )
         defaults.set(request.id, forKey: recordingToggleRequestIDKey)
         defaults.set(requestedAt, forKey: recordingToggleRequestedAtKey)
@@ -333,6 +411,18 @@ enum SharedCommandStore {
             forKey: recordingToggleRequiresForegroundRoundTripKey
         )
         defaults.set(command.rawValue, forKey: recordingCommandKey)
+        if let sourceHost {
+            defaults.set(
+                sourceHost.bundleIdentifier,
+                forKey: recordingHostBundleIdentifierKey
+            )
+            defaults.set(sourceHost.capturedAt, forKey: recordingHostCapturedAtKey)
+            defaults.set(sourceHost.generation, forKey: recordingHostGenerationKey)
+        } else {
+            defaults.removeObject(forKey: recordingHostBundleIdentifierKey)
+            defaults.removeObject(forKey: recordingHostCapturedAtKey)
+            defaults.removeObject(forKey: recordingHostGenerationKey)
+        }
         defaults.removeObject(forKey: recordingResponseRequestIDKey)
         defaults.removeObject(forKey: recordingResponseCommandKey)
         defaults.removeObject(forKey: recordingResponsePhaseKey)
@@ -362,15 +452,158 @@ enum SharedCommandStore {
             return nil
         }
 
+        defaults.synchronize()
+        let requestedAt = defaults.double(forKey: recordingToggleRequestedAtKey)
+        let requiresForegroundRoundTrip = defaults.bool(
+            forKey: recordingToggleRequiresForegroundRoundTripKey
+        )
+        var sourceHost = keyboardHostCapture(
+            bundleIdentifier: defaults.string(forKey: recordingHostBundleIdentifierKey),
+            capturedAt: defaults.double(forKey: recordingHostCapturedAtKey),
+            generation: defaults.string(forKey: recordingHostGenerationKey)
+        )
+        if sourceHost == nil,
+           requiresForegroundRoundTrip,
+           let lateCapture = keyboardHostCaptureAssociatedWithRequest(
+               from: defaults,
+               requestedAt: requestedAt
+           ) {
+            // The arbiter sometimes reports the source only after the containing
+            // app has started opening. Attach that callback to the still-current
+            // request so the main app can enable its return button dynamically.
+            defaults.set(
+                lateCapture.bundleIdentifier,
+                forKey: recordingHostBundleIdentifierKey
+            )
+            defaults.set(lateCapture.capturedAt, forKey: recordingHostCapturedAtKey)
+            defaults.set(lateCapture.generation, forKey: recordingHostGenerationKey)
+            defaults.synchronize()
+            sourceHost = lateCapture
+        }
+
         return SharedRecordingToggleRequest(
             id: id,
-            requestedAt: defaults.double(forKey: recordingToggleRequestedAtKey),
-            requiresForegroundRoundTrip: defaults.bool(
-                forKey: recordingToggleRequiresForegroundRoundTripKey
-            ),
+            requestedAt: requestedAt,
+            requiresForegroundRoundTrip: requiresForegroundRoundTrip,
             command: SharedRecordingCommand(
                 rawValue: defaults.string(forKey: recordingCommandKey) ?? ""
-            ) ?? .start
+            ) ?? .start,
+            sourceHost: sourceHost
+        )
+    }
+
+    private static func keyboardHostCaptureAssociatedWithRequest(
+        from defaults: UserDefaults,
+        requestedAt: TimeInterval
+    ) -> SharedKeyboardHostCapture? {
+        let capturedAt = defaults.double(forKey: keyboardHostCapturedAtKey)
+        let now = Date().timeIntervalSince1970
+        guard requestedAt > 0,
+              capturedAt >= requestedAt - 2,
+              capturedAt <= requestedAt + 3,
+              capturedAt <= now + 1 else {
+            return nil
+        }
+
+        return keyboardHostCapture(
+            bundleIdentifier: defaults.string(forKey: keyboardHostBundleIdentifierKey),
+            capturedAt: capturedAt,
+            generation: defaults.string(forKey: keyboardHostGenerationKey)
+        )
+    }
+
+    static func latestUnconsumedKeyboardHostCapture(
+        presentationStartedAt: TimeInterval,
+        earlyCallbackTolerance: TimeInterval = 4
+    ) -> SharedKeyboardHostCapture? {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return nil
+        }
+
+        // The ObjC hook can run from +load before Swift's view lifecycle. Read
+        // that callback instead of clearing it and waiting for another one.
+        defaults.synchronize()
+        let capturedAt = defaults.double(forKey: keyboardHostCapturedAtKey)
+        let now = Date().timeIntervalSince1970
+        guard capturedAt >= presentationStartedAt - earlyCallbackTolerance,
+              capturedAt <= now + 1,
+              let generation = defaults.string(forKey: keyboardHostGenerationKey),
+              generation != defaults.string(forKey: keyboardHostConsumedGenerationKey) else {
+            return nil
+        }
+
+        return keyboardHostCapture(
+            bundleIdentifier: defaults.string(forKey: keyboardHostBundleIdentifierKey),
+            capturedAt: capturedAt,
+            generation: generation
+        )
+    }
+
+    static func markKeyboardHostCaptureConsumed(_ capture: SharedKeyboardHostCapture) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(capture.generation, forKey: keyboardHostConsumedGenerationKey)
+        defaults.synchronize()
+    }
+
+    static func hostKind(for bundleIdentifier: String) -> SharedKeyboardHostKind {
+        isReturnableHostBundleIdentifier(bundleIdentifier)
+            ? .application
+            : .systemInterface
+    }
+
+    static func isReturnableHostBundleIdentifier(_ bundleIdentifier: String) -> Bool {
+        let normalized = bundleIdentifier
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.contains("."),
+              normalized != appBundleIdentifier.lowercased(),
+              normalized != Bundle.main.bundleIdentifier?.lowercased() else {
+            return false
+        }
+
+        let blockedIdentifiers: Set<String> = [
+            "com.apple.springboard",
+            "com.apple.spotlight",
+            "com.apple.searchui",
+            "com.apple.inputui",
+            "com.apple.keyboardservices"
+        ]
+        guard !blockedIdentifiers.contains(normalized) else {
+            return false
+        }
+
+        let blockedFragments = [
+            "springboard",
+            "spotlight",
+            "searchui",
+            "inputui",
+            "keyboardservices",
+            "textinput"
+        ]
+        return !blockedFragments.contains(where: normalized.contains)
+    }
+
+    private static func keyboardHostCapture(
+        bundleIdentifier: String?,
+        capturedAt: TimeInterval,
+        generation: String?
+    ) -> SharedKeyboardHostCapture? {
+        guard let bundleIdentifier,
+              !bundleIdentifier.isEmpty,
+              capturedAt > 0,
+              let generation,
+              !generation.isEmpty else {
+            return nil
+        }
+
+        return SharedKeyboardHostCapture(
+            bundleIdentifier: bundleIdentifier,
+            capturedAt: capturedAt,
+            generation: generation,
+            kind: hostKind(for: bundleIdentifier)
         )
     }
 
