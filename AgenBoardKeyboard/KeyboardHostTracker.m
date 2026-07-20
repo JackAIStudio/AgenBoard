@@ -1,6 +1,6 @@
 /*
  Adapted from KeyboardHostBundleID:
- https://github.com/editorss/KeyboardHostBundleID
+ https://github.com/Muskupecli/KeyboardHostBundleID
 
  MIT License
 
@@ -29,28 +29,58 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-static NSString *const ABArbiterClientClassName =
-    @"_UIKeyboardArbiterClient";
+static NSString *const ABArbiterClientClassName = @"_UIKeyboardArbiterClient";
 static NSString *const ABInputDestinationClassName =
     @"_UIKeyboardArbiterClientInputDestination";
 static NSString *const ABKeyboardChangedSelectorName =
     @"queue_keyboardChanged:onComplete:";
-static NSString *const ABSourceBundleIdentifierKey =
-    @"_sourceBundleIdentifier";
-static NSString *const ABAppGroupIdentifier =
-    @"group.dev.local.agenboard";
+static NSString *const ABSourceBundleIdentifierKey = @"_sourceBundleIdentifier";
 static NSString *const ABStoredHostBundleIdentifierKey =
     @"keyboardHostBundleIdentifier";
 static NSString *const ABStoredHostCapturedAtKey =
     @"keyboardHostBundleIdentifierCapturedAt";
+static NSString *const ABStoredHostGenerationKey = @"keyboardHostCaptureGeneration";
 
 static IMP ABOriginalKeyboardChangedImplementation = NULL;
 static BOOL ABHostTrackingInstalled = NO;
 
+static NSString *ABConfiguredIdentifier(NSString *key, NSString *fallback) {
+    id value = NSBundle.mainBundle.infoDictionary[key];
+    if (![value isKindOfClass:NSString.class]) {
+        return fallback;
+    }
+
+    NSString *identifier = [(NSString *)value
+        stringByTrimmingCharactersInSet:
+            NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (identifier.length == 0 || [identifier containsString:@"$("]) {
+        return fallback;
+    }
+    return identifier;
+}
+
+static NSString *ABAppGroupIdentifier(void) {
+    return ABConfiguredIdentifier(
+        @"AgenBoardAppGroupIdentifier",
+        @"group.dev.local.agenboard"
+    );
+}
+
+static NSString *ABAppBundleIdentifier(void) {
+    return ABConfiguredIdentifier(
+        @"AgenBoardAppBundleIdentifier",
+        @"dev.local.agenboard"
+    );
+}
+
+static NSUserDefaults *ABSharedDefaults(void) {
+    return [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier()];
+}
+
 static void ABStoreDiagnostic(NSString *key, id value) {
-    NSUserDefaults *defaults =
-        [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier];
+    NSUserDefaults *defaults = ABSharedDefaults();
     [defaults setObject:value forKey:key];
+    [defaults synchronize];
 }
 
 static BOOL ABIsUsableHostBundleIdentifier(NSString *bundleIdentifier) {
@@ -59,13 +89,9 @@ static BOOL ABIsUsableHostBundleIdentifier(NSString *bundleIdentifier) {
         return NO;
     }
 
-    NSString *extensionBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
-    if ([bundleIdentifier isEqualToString:extensionBundleIdentifier] ||
-        [bundleIdentifier hasPrefix:@"dev.local.agenboard"]) {
-        return NO;
-    }
-
-    return YES;
+    NSString *extensionIdentifier = NSBundle.mainBundle.bundleIdentifier;
+    return ![bundleIdentifier isEqualToString:extensionIdentifier] &&
+        ![bundleIdentifier isEqualToString:ABAppBundleIdentifier()];
 }
 
 static void ABStoreHostBundleIdentifier(NSString *bundleIdentifier) {
@@ -73,27 +99,26 @@ static void ABStoreHostBundleIdentifier(NSString *bundleIdentifier) {
         return;
     }
 
-    NSUserDefaults *defaults =
-        [[NSUserDefaults alloc] initWithSuiteName:ABAppGroupIdentifier];
-    [defaults setObject:bundleIdentifier
-                 forKey:ABStoredHostBundleIdentifierKey];
-    [defaults setDouble:NSDate.date.timeIntervalSince1970
-                 forKey:ABStoredHostCapturedAtKey];
+    NSUserDefaults *defaults = ABSharedDefaults();
+    // The callback is the authoritative capture event. Give every callback its
+    // own ID so Swift can consume a fresh event without first publishing a
+    // generation (which is too late when +load receives the first callback).
+    NSString *generation = NSUUID.UUID.UUIDString;
+    NSTimeInterval capturedAt = NSDate.date.timeIntervalSince1970;
+    [defaults setObject:bundleIdentifier forKey:ABStoredHostBundleIdentifierKey];
+    [defaults setDouble:capturedAt forKey:ABStoredHostCapturedAtKey];
+    [defaults setObject:generation forKey:ABStoredHostGenerationKey];
+    [defaults setObject:bundleIdentifier forKey:@"keyboardHostTrackerLastBundleID"];
+    [defaults setObject:generation
+                 forKey:@"keyboardHostTrackerLastCaptureGeneration"];
+    [defaults setDouble:capturedAt forKey:@"keyboardHostTrackerLastCallbackAt"];
     [defaults synchronize];
-    NSLog(@"[AgenBoardHost] Captured host: %@", bundleIdentifier);
+    NSLog(@"[AgenBoardHost] Captured host %@ generation %@",
+          bundleIdentifier,
+          generation);
 }
 
-static void ABKeyboardChanged(
-    id self,
-    SEL selector,
-    id change,
-    id completion
-) {
-    ABStoreDiagnostic(
-        @"keyboardHostTrackerLastCallbackAt",
-        @(NSDate.date.timeIntervalSince1970)
-    );
-
+static void ABKeyboardChanged(id self, SEL selector, id change, id completion) {
     if (change != nil) {
         @try {
             id value = [change valueForKey:ABSourceBundleIdentifierKey];
@@ -140,20 +165,22 @@ static BOOL ABKeyboardArbiterAlwaysEnabled(
             @"keyboardHostTrackerLoadedAt",
             @(NSDate.date.timeIntervalSince1970)
         );
-        [self installHostTracking];
+        [self installPassiveHostTracking];
     }
 }
 
-+ (void)installHostTracking {
++ (void)installPassiveHostTracking {
     if (ABHostTrackingInstalled) {
         return;
     }
 
+    // iOS 26.4+ gates destination-change delivery on this class method. It
+    // must be enabled before UIKit's first arbiter dispatch; enabling it only
+    // when the recording button is tapped is already too late.
     Class arbiterClass = NSClassFromString(ABArbiterClientClassName);
-    SEL enabledSelector = NSSelectorFromString(@"enabled");
     Method enabledMethod = class_getClassMethod(
         arbiterClass,
-        enabledSelector
+        NSSelectorFromString(@"enabled")
     );
     ABStoreDiagnostic(
         @"keyboardHostTrackerArbiterClassFound",
@@ -168,17 +195,16 @@ static BOOL ABKeyboardArbiterAlwaysEnabled(
             enabledMethod,
             (IMP)ABKeyboardArbiterAlwaysEnabled
         );
+        ABStoreDiagnostic(
+            @"keyboardHostTrackerEnabledOverride",
+            @"enabled for extension lifetime"
+        );
     }
 
-    Class destinationClass = NSClassFromString(
-        ABInputDestinationClassName
-    );
-    SEL changedSelector = NSSelectorFromString(
-        ABKeyboardChangedSelectorName
-    );
+    Class destinationClass = NSClassFromString(ABInputDestinationClassName);
     Method changedMethod = class_getInstanceMethod(
         destinationClass,
-        changedSelector
+        NSSelectorFromString(ABKeyboardChangedSelectorName)
     );
     ABStoreDiagnostic(
         @"keyboardHostTrackerDestinationClassFound",
@@ -199,23 +225,20 @@ static BOOL ABKeyboardArbiterAlwaysEnabled(
     IMP currentImplementation = method_getImplementation(changedMethod);
     if (currentImplementation != (IMP)ABKeyboardChanged) {
         ABOriginalKeyboardChangedImplementation = currentImplementation;
-        method_setImplementation(
-            changedMethod,
-            (IMP)ABKeyboardChanged
-        );
+        method_setImplementation(changedMethod, (IMP)ABKeyboardChanged);
     }
     ABHostTrackingInstalled = YES;
-    ABStoreDiagnostic(@"keyboardHostTrackerInstallStatus", @"installed");
+    ABStoreDiagnostic(
+        @"keyboardHostTrackerInstallStatus",
+        @"passive callback installed"
+    );
 }
 
-+ (void)refreshHostBundleIdentifier {
-    [self installHostTracking];
++ (void)refreshHostBundleIdentifierOnce {
+    [self installPassiveHostTracking];
 
     Class arbiterClass = NSClassFromString(ABArbiterClientClassName);
-    SEL sharedSelector = NSSelectorFromString(
-        @"automaticSharedArbiterClient"
-    );
-
+    SEL sharedSelector = NSSelectorFromString(@"automaticSharedArbiterClient");
     if (arbiterClass == Nil ||
         ![arbiterClass respondsToSelector:sharedSelector]) {
         ABStoreDiagnostic(
@@ -227,16 +250,8 @@ static BOOL ABKeyboardArbiterAlwaysEnabled(
 
     id (*sendObject)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
     id arbiter = sendObject(arbiterClass, sharedSelector);
-    if (arbiter == nil) {
-        ABStoreDiagnostic(
-            @"keyboardHostTrackerRefreshStatus",
-            @"shared arbiter is nil"
-        );
-        return;
-    }
-
     SEL checkSelector = NSSelectorFromString(@"checkConnection");
-    if (![arbiter respondsToSelector:checkSelector]) {
+    if (arbiter == nil || ![arbiter respondsToSelector:checkSelector]) {
         ABStoreDiagnostic(
             @"keyboardHostTrackerRefreshStatus",
             @"checkConnection unavailable"
@@ -248,7 +263,7 @@ static BOOL ABKeyboardArbiterAlwaysEnabled(
     sendVoid(arbiter, checkSelector);
     ABStoreDiagnostic(
         @"keyboardHostTrackerRefreshStatus",
-        @"checkConnection sent"
+        @"single checkConnection sent"
     );
 }
 

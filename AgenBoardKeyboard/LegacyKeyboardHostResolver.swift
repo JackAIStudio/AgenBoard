@@ -1,6 +1,6 @@
 /*
  Adapted from KeyboardHostBundleID:
- https://github.com/editorss/KeyboardHostBundleID
+ https://github.com/Muskupecli/KeyboardHostBundleID
 
  MIT License
 
@@ -32,8 +32,7 @@ import UIKit
 enum LegacyKeyboardHostResolver {
     @MainActor
     static func resolve(from inputViewController: UIInputViewController) -> String? {
-        guard let hostPID = inputViewController.parent?
-            .value(forKey: "_hostPID") else {
+        guard let hostPID = inputViewController.parent?.value(forKey: "_hostPID") else {
             return nil
         }
 
@@ -50,9 +49,7 @@ enum LegacyKeyboardHostResolver {
               let extensionPersonalities = personalities.object(
                 forKey: extensionBundleIdentifier
               ) as? AnyObject,
-              let personality = extensionPersonalities.object(
-                forKey: hostPID
-              ) as? AnyObject,
+              let personality = extensionPersonalities.object(forKey: hostPID) as? AnyObject,
               let connection = personality.perform(
                 NSSelectorFromString("connection")
               )?.takeUnretainedValue() as? NSObjectProtocol,
@@ -67,10 +64,7 @@ enum LegacyKeyboardHostResolver {
         }
         defer { dlclose(handle) }
 
-        guard let symbol = dlsym(
-            handle,
-            "xpc_connection_copy_bundle_id"
-        ) else {
+        guard let symbol = dlsym(handle, "xpc_connection_copy_bundle_id") else {
             return nil
         }
 
@@ -85,7 +79,6 @@ enum LegacyKeyboardHostResolver {
         guard let value = copyBundleIdentifier(xpcConnection) else {
             return nil
         }
-
         let bundleIdentifier = String(cString: value)
         return bundleIdentifier.isEmpty ? nil : bundleIdentifier
     }

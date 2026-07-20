@@ -60,7 +60,7 @@
       queueDebuggingEnableBacktraceRecording = "Yes">
       <RemoteRunnable
          runnableDebuggingMode = "0"
-         BundleIdentifier = "dev.local.agenboard">
+         BundleIdentifier = "com.apple.mobilesafari">
       </RemoteRunnable>
       <MacroExpansion>
          <BuildableReference

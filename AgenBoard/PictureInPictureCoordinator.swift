@@ -267,6 +267,7 @@ final class PictureInPictureCoordinator: NSObject, ObservableObject {
 
     private enum PendingAction {
         case startImmediately
+        case startForBackgroundTransition
         case prepareAutomaticStart
     }
 
@@ -281,6 +282,7 @@ final class PictureInPictureCoordinator: NSObject, ObservableObject {
     private var frameRenderer: PictureInPictureFrameRenderer?
     private var pendingAction: PendingAction?
     private var startRetryTask: Task<Void, Never>?
+    private var isPictureInPictureStartRequested = false
     private var stopIntent: StopIntent?
     private var isRecording = false
     private var audioLevel = 0.0
@@ -327,6 +329,16 @@ final class PictureInPictureCoordinator: NSObject, ObservableObject {
         attemptPendingAction()
     }
 
+    func startForBackgroundTransition() {
+        guard !isPictureInPictureActive,
+              !isPictureInPictureStartRequested else {
+            return
+        }
+
+        pendingAction = .startForBackgroundTransition
+        attemptPendingAction()
+    }
+
     func stop() {
         pendingAction = nil
         startRetryTask?.cancel()
@@ -369,6 +381,11 @@ final class PictureInPictureCoordinator: NSObject, ObservableObject {
             return
         }
 
+        guard !isPictureInPictureStartRequested else {
+            self.pendingAction = nil
+            return
+        }
+
         guard !controller.isPictureInPictureActive else {
             self.pendingAction = nil
             startRetryTask?.cancel()
@@ -401,7 +418,8 @@ final class PictureInPictureCoordinator: NSObject, ObservableObject {
         isPreparedForBackgroundTransition = true
 
         switch pendingAction {
-        case .startImmediately:
+        case .startImmediately, .startForBackgroundTransition:
+            isPictureInPictureStartRequested = true
             controller.startPictureInPicture()
         case .prepareAutomaticStart:
             // The video-call PiP route starts automatically when the app moves
@@ -528,6 +546,7 @@ final class PictureInPictureCoordinator: NSObject, ObservableObject {
 extension PictureInPictureCoordinator: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         Task { @MainActor in
+            self.isPictureInPictureStartRequested = true
             self.status = "正在启动画中画"
         }
     }
@@ -537,6 +556,7 @@ extension PictureInPictureCoordinator: AVPictureInPictureControllerDelegate {
             self.pendingAction = nil
             self.startRetryTask?.cancel()
             self.startRetryTask = nil
+            self.isPictureInPictureStartRequested = false
             self.isPictureInPictureActive = true
             self.isPreparedForBackgroundTransition = true
             self.status = "画中画运行中"
@@ -547,6 +567,7 @@ extension PictureInPictureCoordinator: AVPictureInPictureControllerDelegate {
         Task { @MainActor in
             let shouldFinishRecording = self.stopIntent == nil
             self.stopIntent = nil
+            self.isPictureInPictureStartRequested = false
             self.isPictureInPictureActive = false
             self.isPreparedForBackgroundTransition = false
             self.status = "画中画已停止"
@@ -578,6 +599,7 @@ extension PictureInPictureCoordinator: AVPictureInPictureControllerDelegate {
             self.pendingAction = nil
             self.startRetryTask?.cancel()
             self.startRetryTask = nil
+            self.isPictureInPictureStartRequested = false
             self.isPictureInPictureActive = false
             self.isPreparedForBackgroundTransition = false
             self.status = "画中画启动失败：\(error.localizedDescription)"
@@ -590,7 +612,8 @@ struct PictureInPictureSourceView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
         let view = PiPSourceUIView()
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
         coordinator.attachSourceView(view)
         return view
     }

@@ -10,7 +10,10 @@ enum SpeechRecognitionProvider: String, Codable, CaseIterable, Identifiable, Sen
     var title: String {
         switch self {
         case .apple:
-            return "Apple 本机识别"
+            if #available(iOS 26.0, *) {
+                return "Apple 本机识别"
+            }
+            return "Apple 系统识别"
         case .aliyun:
             return "阿里云 Fun-ASR"
         }
@@ -37,9 +40,85 @@ enum SpeechRecognitionProvider: String, Codable, CaseIterable, Identifiable, Sen
     var detail: String {
         switch self {
         case .apple:
-            return "本机处理 · 零 API 费用"
+            if #available(iOS 26.0, *) {
+                return "设备端处理 · 无需 API Key"
+            }
+            return "Apple Speech 兼容模式 · 无需 API Key"
         case .aliyun:
-            return "整段录音 · 动态热词权重 5"
+            return "云端整段识别 · 使用你自己的 API Key"
+        }
+    }
+
+    var guidanceTitle: String {
+        switch self {
+        case .apple:
+            return "速度和隐私优先"
+        case .aliyun:
+            return "准确度和长录音优先"
+        }
+    }
+
+    var guidanceSummary: String {
+        switch self {
+        case .apple:
+            return "适合聊天、随手记录和希望快速回填文字的日常场景。"
+        case .aliyun:
+            return "适合专业词较多、环境复杂或希望获得更稳定中文结果的场景。"
+        }
+    }
+
+    var guidanceStrengths: [String] {
+        switch self {
+        case .apple:
+            if #available(iOS 26.0, *) {
+                return [
+                    "设备端 SpeechAnalyzer，通常返回更快",
+                    "无需注册第三方服务，也没有单独的 API 调用费用",
+                    "支持使用 AgenBoard 热词辅助识别"
+                ]
+            }
+            return [
+                "直接使用系统 Apple Speech 能力",
+                "无需注册第三方服务，也没有单独的 API 调用费用",
+                "支持使用 AgenBoard 热词辅助识别"
+            ]
+        case .aliyun:
+            return [
+                "云端整段识别，通常更适合中文长录音与专业词场景",
+                "支持同步最多 100 个已启用热词",
+                "结果包含字词时间戳，便于后续校对"
+            ]
+        }
+    }
+
+    var guidanceConsiderations: [String] {
+        switch self {
+        case .apple:
+            if #available(iOS 26.0, *) {
+                return [
+                    "方言、噪声或专业词较多时，结果可能不如云端服务稳定",
+                    "首次使用可能需要下载 Apple 中文语音模型"
+                ]
+            }
+            return [
+                "方言、噪声或专业词较多时，结果可能不如云端服务稳定",
+                "iOS 17–25 使用 Apple Speech 兼容路径，联网需求由系统和设备能力决定"
+            ]
+        case .aliyun:
+            return [
+                "完整录音和已启用热词会发送到阿里云百炼处理",
+                "需要联网，等待时间通常比设备端识别更长",
+                "调用费用由你自己的百炼账号承担"
+            ]
+        }
+    }
+
+    var privacySummary: String {
+        switch self {
+        case .apple:
+            return "AgenBoard 不会把录音发送到项目维护者的服务器。"
+        case .aliyun:
+            return "API Key 仅保存在本机钥匙串；AgenBoard 当前不设中转服务器，主 App 直接调用阿里云百炼。"
         }
     }
 }

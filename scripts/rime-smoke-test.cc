@@ -50,6 +50,162 @@ bool HasExpectedFirstCandidate(RimeApi* rime,
   return !candidates.empty() && candidates.front() == expected_candidate;
 }
 
+bool HasCandidateOnLaterPage(RimeApi* rime,
+                             RimeSessionId session,
+                             const char* input,
+                             const char* expected_candidate) {
+  rime->clear_composition(session);
+  for (const char* cursor = input; *cursor; ++cursor) {
+    if (!rime->process_key(session, *cursor, 0)) {
+      return false;
+    }
+  }
+
+  for (int page = 0; page < 32; ++page) {
+    const auto candidates = Candidates(rime, session);
+    for (const auto& candidate : candidates) {
+      if (candidate == expected_candidate) {
+        return page > 0;
+      }
+    }
+
+    RIME_STRUCT(RimeContext, context);
+    if (!rime->get_context(session, &context)) {
+      return false;
+    }
+    const bool is_last_page = context.menu.is_last_page;
+    rime->free_context(&context);
+    if (is_last_page || !rime->change_page(session, false)) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+bool HasCandidateInSlice(RimeApi* rime,
+                         RimeSessionId session,
+                         const char* input,
+                         int start_index,
+                         int count,
+                         const char* expected_candidate) {
+  rime->clear_composition(session);
+  for (const char* cursor = input; *cursor; ++cursor) {
+    if (!rime->process_key(session, *cursor, 0)) {
+      return false;
+    }
+  }
+
+  RimeCandidateListIterator iterator = {0};
+  if (!rime->candidate_list_from_index(session, &iterator, start_index)) {
+    return false;
+  }
+  bool found = false;
+  for (int index = 0; index < count && rime->candidate_list_next(&iterator);
+       ++index) {
+    if (std::strcmp(iterator.candidate.text, expected_candidate) == 0) {
+      found = true;
+      break;
+    }
+  }
+  rime->candidate_list_end(&iterator);
+  return found;
+}
+
+bool SupportsProgressiveCandidateSelection(RimeApi* rime,
+                                           RimeSessionId session,
+                                           const char* input,
+                                           const char* partial_candidate,
+                                           const char* expected_preedit,
+                                           const char* final_candidate,
+                                           const char* expected_commit) {
+  rime->clear_composition(session);
+  for (const char* cursor = input; *cursor; ++cursor) {
+    if (!rime->process_key(session, *cursor, 0)) {
+      return false;
+    }
+  }
+
+  bool selected = false;
+  for (int page = 0; page < 32 && !selected; ++page) {
+    const auto candidates = Candidates(rime, session);
+    for (size_t index = 0; index < candidates.size(); ++index) {
+      if (candidates[index] == partial_candidate) {
+        selected = rime->select_candidate_on_current_page(session, index);
+        break;
+      }
+    }
+    if (!selected && !rime->change_page(session, false)) {
+      return false;
+    }
+  }
+  if (!selected) {
+    return false;
+  }
+
+  RIME_STRUCT(RimeCommit, commit);
+  if (rime->get_commit(session, &commit)) {
+    rime->free_commit(&commit);
+    return false;
+  }
+
+  const char* raw_input = rime->get_input(session);
+  RIME_STRUCT(RimeContext, context);
+  if (!raw_input || !*raw_input ||
+      !rime->get_context(session, &context)) {
+    return false;
+  }
+  const std::string remaining_input = raw_input;
+  const std::string preedit = context.composition.preedit
+                                  ? context.composition.preedit
+                                  : "";
+  const std::string preview = context.commit_text_preview
+                                  ? context.commit_text_preview
+                                  : "";
+  const bool has_remaining_candidates = context.menu.num_candidates > 0;
+  std::printf("partial-selection\tinput:%s\tpreedit:%s\tpreview:%s\t"
+              "selection:%d-%d\tcursor:%zu\n",
+              remaining_input.c_str(),
+              preedit.c_str(),
+              preview.c_str(),
+              context.composition.sel_start,
+              context.composition.sel_end,
+              rime->get_caret_pos(session));
+  rime->free_context(&context);
+  if (!has_remaining_candidates || remaining_input != input ||
+      preedit != expected_preedit) {
+    return false;
+  }
+
+  selected = false;
+  for (int page = 0; page < 32 && !selected; ++page) {
+    const auto candidates = Candidates(rime, session);
+    for (size_t index = 0; index < candidates.size(); ++index) {
+      if (candidates[index] == final_candidate) {
+        selected = rime->select_candidate_on_current_page(session, index);
+        break;
+      }
+    }
+    if (!selected && !rime->change_page(session, false)) {
+      return false;
+    }
+  }
+  if (!selected) {
+    return false;
+  }
+
+  RIME_STRUCT(RimeCommit, final_commit);
+  if (!rime->get_commit(session, &final_commit)) {
+    return false;
+  }
+  const std::string committed_text = final_commit.text ? final_commit.text : "";
+  rime->free_commit(&final_commit);
+  const char* completed_input = rime->get_input(session);
+  std::printf("progressive-commit\ttext:%s\n", committed_text.c_str());
+  return committed_text == expected_commit &&
+      (!completed_input || !*completed_input);
+}
+
 bool LearnCandidate(RimeApi* rime,
                     RimeSessionId session,
                     const char* input,
@@ -122,6 +278,22 @@ int main(int argc, char* argv[]) {
       !HasExpectedFirstCandidate(rime, session, "zhongguo", "中国") ||
       !HasExpectedFirstCandidate(rime, session, "shurufa", "输入法")) {
     std::fprintf(stderr, "unexpected first candidate\n");
+    rime->destroy_session(session);
+    rime->finalize();
+    return 1;
+  }
+  if (!HasCandidateOnLaterPage(rime, session, "yi", "熠") ||
+      !HasCandidateInSlice(rime, session, "yi", 48, 48, "熠")) {
+    std::fprintf(stderr,
+                 "candidate paging did not expose 熠 after the first page\n");
+    rime->destroy_session(session);
+    rime->finalize();
+    return 1;
+  }
+  if (!SupportsProgressiveCandidateSelection(
+          rime, session, "yihui", "熠", "熠hui", "辉", "熠辉")) {
+    std::fprintf(stderr,
+                 "progressive candidate selection did not complete 熠辉\n");
     rime->destroy_session(session);
     rime->finalize();
     return 1;

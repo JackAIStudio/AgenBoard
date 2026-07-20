@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/JackAIStudio/AgenBoard/actions/workflows/build.yml/badge.svg)](https://github.com/JackAIStudio/AgenBoard/actions/workflows/build.yml)
 
-iPhone 语音转文字 MVP，支持在 Apple 本机识别与阿里云 Fun-ASR 录音文件识别之间切换。
+iPhone 语音转文字 MVP，支持在 Apple 系统识别与阿里云 Fun-ASR 录音文件识别之间切换。
 
 ## 项目状态
 
@@ -50,6 +50,21 @@ recordings/*.m4a            # 仅在用户明确开启时存在
 - API Key 默认不导出。用户可以明确开启“包含阿里云 API Key”，此时它会以明文写入 `credentials.json`，导入后重新保存到目标设备钥匙串。
 - 缓存、临时文件、画中画状态和键盘运行状态不会进入数据包。
 
+## 如何选择识别服务
+
+| | Apple 系统识别 | 阿里云 Fun-ASR |
+| --- | --- | --- |
+| 更适合 | 日常聊天、随手记录、快速回填 | 中文长录音、专业词较多、准确度优先 |
+| 处理方式 | iOS 26 使用设备端 SpeechAnalyzer；iOS 17–25 使用 Apple Speech 兼容路径 | 主 App 上传完整录音并提交云端异步识别 |
+| 速度 | 通常更快 | 受上传、排队和网络状况影响，通常更慢 |
+| 账号与费用 | 无需第三方 API Key，没有单独的 API 调用费用 | 使用用户自己的百炼 API Key，费用计入用户自己的阿里云账号 |
+| 数据说明 | AgenBoard 不会把录音发送到项目维护者的服务器 | 录音和已启用热词会发送到阿里云百炼；当前没有 AgenBoard 中转服务器 |
+| 主要取舍 | 方言、噪声和专业词场景下结果可能不如云端服务稳定 | 需要联网并上传音频，同时需要用户自行配置和保管 API Key |
+
+首次打开 App 会显示完整使用向导，帮助用户添加键盘、理解“允许完全访问”的用途、验证键盘状态并选择识别服务。完成后也可以随时从首页“使用指南”重新查看和切换。
+
+> iOS 26 的 Apple 路径使用设备端语音模型，首次识别可能需要下载由系统管理的中文模型。iOS 17–25 的兼容路径是否需要联网由系统和设备能力决定，项目不在这些系统上承诺完全离线。
+
 ## 配置阿里云识别
 
 1. 在 App 首页打开“识别服务”。
@@ -57,7 +72,7 @@ recordings/*.m4a            # 仅在用户明确开启时存在
 3. 粘贴在华北 2（北京）创建的阿里云百炼 API Key。
 4. 点击“保存阿里云配置”，然后点击“测试连接”。
 
-API Key 只保存在本机钥匙串，不会写入项目文件或 `UserDefaults`；配置页可以按需显示、隐藏或复制已保存的 Key。个人版固定使用华北 2（北京）的 DashScope 接入点，不需要填写 Workspace ID。阿里云模式先把本地 `m4a` 上传到百炼临时存储，再提交 `fun-asr` 异步录音文件识别任务。当前直连方式只适合个人设备上的 MVP；正式分发时应改由自己的服务端保管 API Key。
+API Key 只保存在本机钥匙串，不会写入项目文件或 `UserDefaults`；配置页可以按需显示、隐藏或复制已保存的 Key。个人版固定使用华北 2（北京）的 DashScope 接入点，不需要填写 Workspace ID。阿里云模式先把本地 `m4a` 上传到百炼临时存储，再提交 `fun-asr` 异步录音文件识别任务。当前采用 BYOK（用户自带 API Key）模式，项目方不提供中转服务器；如果未来改为由项目方统一提供托管识别服务，则应由服务端保管项目方凭证并向客户端签发短期凭证。
 
 ## 启用键盘
 
@@ -69,14 +84,14 @@ API Key 只保存在本机钥匙串，不会写入项目文件或 `UserDefaults`
 4. 在第三方键盘里选择 “AgenBoard”
 5. 再次进入 “AgenBoard”，打开“允许完全访问”，以便语音状态、识别结果和快捷短语通过 App Group 与主 App 同步
 
-键盘的“语音”页会把识别结果自动回填到当前输入框；“快捷短语”页默认提供 `/new`、`/start`、测试文本和 `Claude Code`，也可以在主 App 的快捷短语库中自行维护；“键盘”页默认使用中文拼音，点底行的“英/中”可切换英文。拼音字母会实时显示在当前输入框中，候选词显示在顶部左侧，点候选词或按空格可原位替换为中文，按回车则保留字母并换行或提交。语音和快捷短语页左上角的 “AgenBoard” 标题可直接打开主 App。
+键盘的“语音”页会把识别结果自动回填到当前输入框；“快捷短语”页默认提供“你好”和“稍后回复”两条日常示例，也可以在主 App 的快捷短语库中自行维护；“键盘”页默认使用中文拼音，点底行的“英/中”可切换英文。拼音字母会实时显示在当前输入框中，候选词显示在顶部左侧，点候选词或按空格可原位替换为中文，按回车则保留字母并换行或提交。语音和快捷短语页左上角的 “AgenBoard” 标题可直接打开主 App。
 
 ## 拼音引擎
 
 - 核心使用固定版本的 LibrimeKit `0.1.0`（librime `1.16.1`）。
 - 基础词库来自雾凇拼音提交 `07eca7256d0bae6948dcf3838e14910dbe3b00be`。
 - 大型静态词典在构建前从固定的 GitHub Release 下载并校验，最终仍会随键盘离线打包，运行时不会联网下载或现场部署词库。
-- 用户词典存放在 `group.dev.local.agenboard/RimeUserData`，升级应用不会清空。
+- 用户词典存放在所配置 App Group 的 `RimeUserData` 目录，升级应用不会清空。
 - 如果 Rime 资源损坏或初始化失败，旧的轻量拼音引擎仍会作为故障回退。
 
 普通开发者运行 `scripts/fetch-rime-data.sh` 获取锁定版本的预编译数据。维护者更新词库时运行 `scripts/build-rime-data.sh`，脚本会下载固定版本、生成预编译数据，并自动检查常用候选和用户学习；随后可用 `scripts/package-rime-data-release.sh` 制作发布资源。
@@ -106,8 +121,9 @@ xcodebuild \
   build
 ```
 
-如需安装到真机，请在 Xcode 中为主 App 与键盘扩展选择自己的开发团队，
-并将主 App Bundle ID、键盘扩展 Bundle ID 和 App Group 改为自己账号下的唯一值。
+如需安装到真机，请在 Xcode 中打开项目，进入 “Signing & Capabilities”，分别为 `AgenBoard` 和 `AgenBoardKeyboard` 两个 target 选择自己的 Team。项目会自动根据 Team 生成唯一的主 App Bundle ID、键盘扩展 Bundle ID 和 App Group，无需手动填写其他签名标识符。
+
+如需直接调试键盘扩展，请选择 `AgenBoardKeyboard` scheme。该 scheme 默认使用系统 Safari 作为调试宿主；如果 Xcode 询问要运行哪个 App，请选择 Safari。安装并按上文启用 AgenBoard 键盘后，在 Safari 文本框中切换到 AgenBoard 即可触发扩展断点。
 
 ## 许可证
 

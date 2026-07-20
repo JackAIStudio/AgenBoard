@@ -22,6 +22,8 @@ final class RimePinyinEngine: @unchecked Sendable {
     )
     private let rime = Rime.shared
     private var state = State.idle
+    private var indexedComposition = ""
+    private var candidateIndexByText: [String: Int] = [:]
 
     private init() {}
 
@@ -118,7 +120,10 @@ final class RimePinyinEngine: @unchecked Sendable {
 
     /// Returns nil only when Rime is unavailable, allowing the small legacy
     /// engine to remain a last-resort fallback.
-    func candidates(for composition: String, limit: Int) -> [String]? {
+    func firstCandidatePage(
+        for composition: String,
+        limit: Int
+    ) -> PinyinCandidatePage? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -128,28 +133,83 @@ final class RimePinyinEngine: @unchecked Sendable {
         let normalized = Self.normalizedLetters(composition)
         guard !normalized.isEmpty, limit > 0 else {
             rime.cleanComposition()
-            return []
+            resetCandidateIndex()
+            return PinyinCandidatePage(
+                candidates: [],
+                hasMore: false,
+                nextOffset: 0
+            )
         }
         guard synchronizeComposition(to: normalized) else {
             return nil
         }
+        guard rewindToFirstCandidatePage() else {
+            return nil
+        }
+        indexedComposition = normalized
+        candidateIndexByText.removeAll(keepingCapacity: true)
 
-        var seen = Set<String>()
-        return rime.candidateList().compactMap { candidate in
-            guard !candidate.text.isEmpty,
-                  seen.insert(candidate.text).inserted else {
-                return nil
+        return candidatePage(offset: 0, limit: limit)
+    }
+
+    func nextCandidatePage(
+        for composition: String,
+        offset: Int,
+        limit: Int
+    ) -> PinyinCandidatePage? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard state == .ready else {
+            return nil
+        }
+        let normalized = Self.normalizedLetters(composition)
+        guard !normalized.isEmpty, offset >= 0, limit > 0,
+              synchronizeComposition(to: normalized) else {
+            return nil
+        }
+
+        if indexedComposition != normalized {
+            indexedComposition = normalized
+            candidateIndexByText.removeAll(keepingCapacity: true)
+        }
+        return candidatePage(offset: offset, limit: limit)
+    }
+
+    private func candidatePage(offset: Int, limit: Int) -> PinyinCandidatePage {
+        // Librime's iterator offset is zero-based, so 48 starts the second
+        // 48-candidate batch. Reading by offset avoids candidateList(), which
+        // always starts from the global first candidate regardless of pageNo.
+        let fetchedCandidates = rime.candidateListWithIndex(
+            index: offset,
+            andCount: limit + 1
+        )
+        let visibleCandidates = fetchedCandidates.prefix(limit)
+        var candidates: [String] = []
+        candidates.reserveCapacity(visibleCandidates.count)
+        for (relativeIndex, candidate) in visibleCandidates.enumerated() {
+            guard !candidate.text.isEmpty else {
+                continue
             }
-            return candidate.text
-        }.prefix(limit).map { $0 }
+            candidates.append(candidate.text)
+            candidateIndexByText[candidate.text] = offset + relativeIndex
+        }
+        let nextOffset = offset + visibleCandidates.count
+        return PinyinCandidatePage(
+            candidates: candidates,
+            hasMore: fetchedCandidates.count > limit,
+            nextOffset: nextOffset
+        )
     }
 
     /// Selects through librime rather than merely inserting the visible text.
-    /// This is the operation that updates Rime's persistent user dictionary.
+    /// A partial candidate keeps Rime composing unless the caller explicitly
+    /// asks to accept the best conversion for every remaining segment.
     func selectCandidate(
         _ candidate: String,
-        for composition: String
-    ) -> String? {
+        for composition: String,
+        commitRemainingComposition: Bool
+    ) -> PinyinCandidateSelection? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -162,24 +222,73 @@ final class RimePinyinEngine: @unchecked Sendable {
             return nil
         }
 
-        let candidates = rime.candidateList()
-        guard let index = candidates.firstIndex(where: {
+        let candidateIndex: Int
+        if indexedComposition == normalized,
+           let indexedCandidate = candidateIndexByText[candidate] {
+            candidateIndex = indexedCandidate
+        } else if let indexedCandidate = rime.candidateList().firstIndex(where: {
             $0.text == candidate
-        }), rime.selectCandidateOnCurrentPage(index: index) else {
+        }) {
+            candidateIndex = indexedCandidate
+        } else {
+            rime.cleanComposition()
+            return nil
+        }
+
+        guard rewindToFirstCandidatePage() else {
+            rime.cleanComposition()
+            return nil
+        }
+        let pageSize = max(1, Int(rime.context().menu.pageSize))
+        for _ in 0..<(candidateIndex / pageSize) {
+            guard rime.changePage(backward: false) else {
+                rime.cleanComposition()
+                return nil
+            }
+        }
+        let indexOnPage = candidateIndex % pageSize
+        guard rime.selectCandidateOnCurrentPage(index: indexOnPage) else {
             rime.cleanComposition()
             return nil
         }
 
         var committedText = rime.getCommitText()
-        if committedText.isEmpty, !rime.getInputKeys().isEmpty,
-           rime.commitComposition() {
-            // A short candidate can select only the first segment. Committing
-            // the remaining composition preserves today's one-tap UI contract
-            // while still letting Rime learn the explicit segment choice.
+        if committedText.isEmpty,
+           commitRemainingComposition,
+           !rime.getInputKeys().isEmpty {
+            guard rime.commitComposition() else {
+                rime.cleanComposition()
+                resetCandidateIndex()
+                return nil
+            }
             committedText = rime.getCommitText()
         }
-        rime.cleanComposition()
-        return committedText.isEmpty ? candidate : committedText
+
+        if !committedText.isEmpty || rime.getInputKeys().isEmpty {
+            rime.cleanComposition()
+            resetCandidateIndex()
+            return .committed(committedText.isEmpty ? candidate : committedText)
+        }
+
+        let markedText = rime.context().composition.preedit ?? ""
+        resetCandidateIndex()
+        return .composing(markedText: markedText.isEmpty ? candidate : markedText)
+    }
+
+    func markedText(for composition: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard state == .ready else {
+            return nil
+        }
+        let normalized = Self.normalizedLetters(composition)
+        guard !normalized.isEmpty,
+              synchronizeComposition(to: normalized) else {
+            return nil
+        }
+        let preedit = rime.context().composition.preedit ?? ""
+        return preedit.isEmpty ? normalized : preedit
     }
 
     func resetComposition() {
@@ -189,6 +298,7 @@ final class RimePinyinEngine: @unchecked Sendable {
             return
         }
         rime.cleanComposition()
+        resetCandidateIndex()
     }
 
     private func synchronizeComposition(to desiredInput: String) -> Bool {
@@ -220,6 +330,20 @@ final class RimePinyinEngine: @unchecked Sendable {
         }
 
         return rime.getInputKeys() == desiredInput
+    }
+
+    private func rewindToFirstCandidatePage() -> Bool {
+        while rime.context().menu.pageNo > 0 {
+            guard rime.changePage(backward: true) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func resetCandidateIndex() {
+        indexedComposition = ""
+        candidateIndexByText.removeAll(keepingCapacity: true)
     }
 
     private static func normalizedLetters(_ text: String) -> String {

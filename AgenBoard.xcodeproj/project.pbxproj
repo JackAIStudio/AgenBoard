@@ -13,22 +13,20 @@
 		4A6E7A632C00100100AB0001 /* PictureInPictureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A642C00100100AB0001 /* PictureInPictureCoordinator.swift */; };
 		4A6E7A652C00100100AB0001 /* SharedCommandStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */; };
 		4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */; };
-		4E4000012C40000100AB0001 /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */; };
-		4E4000022C40000100AB0001 /* HotwordLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000042C40000100AB0001 /* HotwordLibraryView.swift */; };
-		4E4000052C40000100AB0001 /* HotwordLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000062C40000100AB0001 /* HotwordLibrary.swift */; };
-		505000012C60000100AB0001 /* SpeechServiceConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */; };
-		505000022C60000100AB0001 /* AliyunSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */; };
-		505000032C60000100AB0001 /* SpeechServiceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */; };
-		4F5000012C50000100AB0001 /* RecognitionHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5000032C50000100AB0001 /* RecognitionHistory.swift */; };
-		4F5000022C50000100AB0001 /* RecognitionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */; };
 		4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000022C10000100AB0001 /* KeyboardViewController.swift */; };
+		4B1000032C10000100AB0001 /* AgenBoardKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000162C10000100AB0001 /* PinyinInputEngine.swift */; };
 		4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2000022C20000100AB0001 /* RimePinyinEngine.swift */; };
 		4B2000032C20000100AB0001 /* RimeData in Resources */ = {isa = PBXBuildFile; fileRef = 4B2000042C20000100AB0001 /* RimeData */; };
 		4B2000052C20000100AB0001 /* LibrimeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B2000062C20000100AB0001 /* LibrimeKit */; };
-		4B1000132C10000100AB0001 /* KeyboardHostTracker.m in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000122C10000100AB0001 /* KeyboardHostTracker.m */; };
-		4B1000152C10000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */; };
-		4B1000032C10000100AB0001 /* AgenBoardKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4E4000012C40000100AB0001 /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */; };
+		4E4000022C40000100AB0001 /* HotwordLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000042C40000100AB0001 /* HotwordLibraryView.swift */; };
+		4E4000052C40000100AB0001 /* HotwordLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000062C40000100AB0001 /* HotwordLibrary.swift */; };
+		4F5000012C50000100AB0001 /* RecognitionHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5000032C50000100AB0001 /* RecognitionHistory.swift */; };
+		4F5000022C50000100AB0001 /* RecognitionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */; };
+		505000012C60000100AB0001 /* SpeechServiceConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */; };
+		505000022C60000100AB0001 /* AliyunSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */; };
+		505000032C60000100AB0001 /* SpeechServiceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */; };
 		515100012C71000100AB0001 /* QuickPhraseLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515100022C71000100AB0001 /* QuickPhraseLibrary.swift */; };
 		526000012C80000100AB0001 /* PortableData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526000032C80000100AB0001 /* PortableData.swift */; };
 		526000022C80000100AB0001 /* DataTransferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526000042C80000100AB0001 /* DataTransferView.swift */; };
@@ -36,6 +34,9 @@
 		537000012C90000100AB0001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 537000022C90000100AB0001 /* Assets.xcassets */; };
 		548000012CA0000100AB0001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 548000032CA0000100AB0001 /* PrivacyInfo.xcprivacy */; };
 		548000022CA0000100AB0001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 548000042CA0000100AB0001 /* PrivacyInfo.xcprivacy */; };
+		56A000012CC0000100AB0001 /* KeyboardHostTracker.m in Sources */ = {isa = PBXBuildFile; fileRef = 56A000032CC0000100AB0001 /* KeyboardHostTracker.m */; };
+		56A000022CC0000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */; };
+		57B000012CD0000100AB0001 /* GettingStartedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57B000022CD0000100AB0001 /* GettingStartedView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,33 +68,35 @@
 		4A6E7A5C2C00100100AB0001 /* AgenBoardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenBoardApp.swift; sourceTree = "<group>"; };
 		4A6E7A5E2C00100100AB0001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4A6E7A602C00100100AB0001 /* SpeechRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecorder.swift; sourceTree = "<group>"; };
+		4A6E7A622C00100100AB0001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4A6E7A642C00100100AB0001 /* PictureInPictureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PictureInPictureCoordinator.swift; sourceTree = "<group>"; };
 		4A6E7A662C00100100AB0001 /* SharedCommandStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedCommandStore.swift; sourceTree = "<group>"; };
 		4A6E7A682C00100100AB0001 /* AgenBoard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgenBoard.entitlements; sourceTree = "<group>"; };
-		4A6E7A622C00100100AB0001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
-		4E4000042C40000100AB0001 /* HotwordLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibraryView.swift; sourceTree = "<group>"; };
-		4E4000062C40000100AB0001 /* HotwordLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibrary.swift; sourceTree = "<group>"; };
-		505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceConfiguration.swift; sourceTree = "<group>"; };
-		505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AliyunSpeechTranscriber.swift; sourceTree = "<group>"; };
-		505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceSettingsView.swift; sourceTree = "<group>"; };
-		4F5000032C50000100AB0001 /* RecognitionHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionHistory.swift; sourceTree = "<group>"; };
-		4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionHistoryView.swift; sourceTree = "<group>"; };
 		4B1000022C10000100AB0001 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
-		4B1000162C10000100AB0001 /* PinyinInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinInputEngine.swift; sourceTree = "<group>"; };
-		4B2000022C20000100AB0001 /* RimePinyinEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimePinyinEngine.swift; sourceTree = "<group>"; };
-		4B2000042C20000100AB0001 /* RimeData */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeData; sourceTree = "<group>"; };
-		4B1000122C10000100AB0001 /* KeyboardHostTracker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KeyboardHostTracker.m; sourceTree = "<group>"; };
-		4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyKeyboardHostResolver.swift; sourceTree = "<group>"; };
 		4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AgenBoardKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		4B1000082C10000100AB0001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgenBoardKeyboard.entitlements; sourceTree = "<group>"; };
+		4B1000162C10000100AB0001 /* PinyinInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinInputEngine.swift; sourceTree = "<group>"; };
+		4B2000022C20000100AB0001 /* RimePinyinEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimePinyinEngine.swift; sourceTree = "<group>"; };
+		4B2000042C20000100AB0001 /* RimeData */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeData; sourceTree = "<group>"; };
+		4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
+		4E4000042C40000100AB0001 /* HotwordLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibraryView.swift; sourceTree = "<group>"; };
+		4E4000062C40000100AB0001 /* HotwordLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibrary.swift; sourceTree = "<group>"; };
+		4F5000032C50000100AB0001 /* RecognitionHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionHistory.swift; sourceTree = "<group>"; };
+		4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognitionHistoryView.swift; sourceTree = "<group>"; };
+		505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceConfiguration.swift; sourceTree = "<group>"; };
+		505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AliyunSpeechTranscriber.swift; sourceTree = "<group>"; };
+		505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechServiceSettingsView.swift; sourceTree = "<group>"; };
 		515100022C71000100AB0001 /* QuickPhraseLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPhraseLibrary.swift; sourceTree = "<group>"; };
 		526000032C80000100AB0001 /* PortableData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortableData.swift; sourceTree = "<group>"; };
 		526000042C80000100AB0001 /* DataTransferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTransferView.swift; sourceTree = "<group>"; };
 		537000022C90000100AB0001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		548000032CA0000100AB0001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		548000042CA0000100AB0001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		55A000012CB0000100AB0001 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		56A000032CC0000100AB0001 /* KeyboardHostTracker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KeyboardHostTracker.m; sourceTree = "<group>"; };
+		56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyKeyboardHostResolver.swift; sourceTree = "<group>"; };
+		57B000022CD0000100AB0001 /* GettingStartedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GettingStartedView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +124,7 @@
 			children = (
 				4A6E7A592C00100100AB0001 /* AgenBoard */,
 				4B10000A2C10000100AB0001 /* AgenBoardKeyboard */,
+				55A000022CB0000100AB0001 /* Config */,
 				4A6E7A512C00100100AB0001 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -145,6 +149,7 @@
 				505000042C60000100AB0001 /* SpeechServiceConfiguration.swift */,
 				505000052C60000100AB0001 /* AliyunSpeechTranscriber.swift */,
 				505000062C60000100AB0001 /* SpeechServiceSettingsView.swift */,
+				57B000022CD0000100AB0001 /* GettingStartedView.swift */,
 				4F5000032C50000100AB0001 /* RecognitionHistory.swift */,
 				4F5000042C50000100AB0001 /* RecognitionHistoryView.swift */,
 				4A6E7A642C00100100AB0001 /* PictureInPictureCoordinator.swift */,
@@ -165,16 +170,24 @@
 			isa = PBXGroup;
 			children = (
 				4B1000022C10000100AB0001 /* KeyboardViewController.swift */,
+				56A000032CC0000100AB0001 /* KeyboardHostTracker.m */,
+				56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */,
 				4B1000162C10000100AB0001 /* PinyinInputEngine.swift */,
 				4B2000022C20000100AB0001 /* RimePinyinEngine.swift */,
 				4B2000042C20000100AB0001 /* RimeData */,
-				4B1000122C10000100AB0001 /* KeyboardHostTracker.m */,
-				4B1000142C10000100AB0001 /* LegacyKeyboardHostResolver.swift */,
 				4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */,
 				4B1000082C10000100AB0001 /* Info.plist */,
 				548000042CA0000100AB0001 /* PrivacyInfo.xcprivacy */,
 			);
 			path = AgenBoardKeyboard;
+			sourceTree = "<group>";
+		};
+		55A000022CB0000100AB0001 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				55A000012CB0000100AB0001 /* Shared.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -298,6 +311,7 @@
 				505000012C60000100AB0001 /* SpeechServiceConfiguration.swift in Sources */,
 				505000022C60000100AB0001 /* AliyunSpeechTranscriber.swift in Sources */,
 				505000032C60000100AB0001 /* SpeechServiceSettingsView.swift in Sources */,
+				57B000012CD0000100AB0001 /* GettingStartedView.swift in Sources */,
 				4F5000012C50000100AB0001 /* RecognitionHistory.swift in Sources */,
 				4F5000022C50000100AB0001 /* RecognitionHistoryView.swift in Sources */,
 				4A6E7A632C00100100AB0001 /* PictureInPictureCoordinator.swift in Sources */,
@@ -315,10 +329,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				4B1000012C10000100AB0001 /* KeyboardViewController.swift in Sources */,
+				56A000012CC0000100AB0001 /* KeyboardHostTracker.m in Sources */,
+				56A000022CC0000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */,
 				4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */,
 				4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */,
-				4B1000132C10000100AB0001 /* KeyboardHostTracker.m in Sources */,
-				4B1000152C10000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */,
 				4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -333,41 +347,10 @@
 		};
 /* End PBXTargetDependency section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/zhanggenlove/LibrimeKit.git";
-			requirement = {
-				kind = exactVersion;
-				version = 0.1.0;
-			};
-		};
-		526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
-			requirement = {
-				kind = exactVersion;
-				version = 0.9.20;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		4B2000062C20000100AB0001 /* LibrimeKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */;
-			productName = LibrimeKit;
-		};
-		526000062C80000100AB0001 /* ZIPFoundation */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
-			productName = ZIPFoundation;
-		};
-/* End XCSwiftPackageProductDependency section */
-
 /* Begin XCBuildConfiguration section */
 		4A6E7A532C00100100AB0001 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 55A000012CB0000100AB0001 /* Shared.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -431,6 +414,7 @@
 		};
 		4A6E7A542C00100100AB0001 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 55A000012CB0000100AB0001 /* Shared.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -502,7 +486,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(AGENBOARD_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -530,7 +514,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(AGENBOARD_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -557,7 +541,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(AGENBOARD_KEYBOARD_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -583,7 +567,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.local.agenboard.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(AGENBOARD_KEYBOARD_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -624,6 +608,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zhanggenlove/LibrimeKit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.0;
+			};
+		};
+		526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4B2000062C20000100AB0001 /* LibrimeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B2000072C20000100AB0001 /* XCRemoteSwiftPackageReference "LibrimeKit" */;
+			productName = LibrimeKit;
+		};
+		526000062C80000100AB0001 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 526000072C80000100AB0001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4A6E7A482C00100100AB0001 /* Project object */;
 }

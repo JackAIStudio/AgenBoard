@@ -2,7 +2,14 @@ import SwiftUI
 import UIKit
 import ObjectiveC.runtime
 
+private enum ReturnAttemptStage: String {
+    case systemNavigation
+    case hostApplication
+    case knownURLScheme
+}
+
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recorder: SpeechRecorder
     @StateObject private var historyStore: RecognitionHistoryStore
     @StateObject private var pip = PictureInPictureCoordinator()
@@ -17,16 +24,27 @@ struct ContentView: View {
         SpeechServicePreferences.providerKey,
         store: SpeechServicePreferences.defaults
     ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
+    @AppStorage(GettingStartedPreferences.hasSeenGuideKey)
+    private var hasSeenGettingStartedGuide = false
     @State private var aliyunConfigured = false
     @State private var handledRecordingRequestIDs: Set<String> = []
+    @State private var retriedFailedRecordingRequestIDs: Set<String> = []
+    @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
-    @State private var shouldReturnToPreviousInterface = false
-    @State private var isReturnToPreviousInterfaceScheduled = false
-    @State private var returnHostBundleIdentifier: String?
+    @State private var queuedRecordingStartRequest: SharedRecordingToggleRequest?
+    @State private var keepsPictureInPictureAlive = false
+    @State private var showsManualReturnGuidance = false
+    @State private var manualReturnNeedsSystemFallback = false
+    @State private var systemReturnActionIsReady = false
+    @State private var pendingReturnAttemptID: UUID?
     @State private var showsQuickPhraseLibrary = false
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
     @State private var keyboardHapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
+    @State private var showsGettingStartedGuide = false
+    @State private var evaluatedInitialGuidePresentation = false
+    @State private var keyboardAccessVerified =
+        SharedCommandStore.latestKeyboardAccessVerification()?.isVerified == true
 
     private let recordingRequestLifetime: TimeInterval = 15
 
@@ -36,6 +54,40 @@ struct ContentView: View {
 
     private var selectedProviderIsReady: Bool {
         selectedProvider == .apple || aliyunConfigured
+    }
+
+    private var canReturnToPreviousInterface: Bool {
+        hasCallableReturnTarget && pendingReturnAttemptID == nil
+    }
+
+    private var returnHostBundleIdentifier: String? {
+        guard let sourceHost = activeLaunchRequest?.sourceHost,
+              sourceHost.canOpenApplication else {
+            return nil
+        }
+        return sourceHost.bundleIdentifier
+    }
+
+    private var hasCallableReturnTarget: Bool {
+        systemReturnActionIsReady || returnHostBundleIdentifier != nil
+    }
+
+    private var sourceHostStatusText: String {
+        guard let sourceHost = activeLaunchRequest?.sourceHost else {
+            return "尚未识别来源 App（sourceHost = nil）"
+        }
+
+        let displayName: String
+        switch sourceHost.bundleIdentifier.lowercased() {
+        case "md.obsidian":
+            displayName = "Obsidian"
+        case "com.xingin.discover":
+            displayName = "小红书"
+        default:
+            displayName = sourceHost.canOpenApplication ? "第三方 App" : "系统界面"
+        }
+        let suffix = sourceHost.canOpenApplication ? "" : "，不作为返回目标"
+        return "已识别来源：\(displayName)（\(sourceHost.bundleIdentifier)\(suffix)）"
     }
 
     init() {
@@ -57,7 +109,113 @@ struct ContentView: View {
                         Text(recorder.status)
                             .font(.callout)
                             .foregroundStyle(.secondary)
+
+                        if showsManualReturnGuidance {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label(
+                                    recorder.isRecording ? "录音已启动" : "正在准备录音",
+                                    systemImage: "waveform.and.mic"
+                                )
+                                .font(.headline)
+
+                                Label(
+                                    sourceHostStatusText,
+                                    systemImage: activeLaunchRequest?.sourceHost == nil
+                                        ? "questionmark.circle"
+                                        : activeLaunchRequest?.sourceHost?.canOpenApplication == true
+                                            ? "checkmark.circle.fill"
+                                            : "info.circle.fill"
+                                )
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(
+                                    activeLaunchRequest?.sourceHost?.canOpenApplication == true
+                                        ? Color.green
+                                        : Color.orange
+                                )
+
+                                if activeLaunchRequest?.sourceHost == nil {
+                                    Text(SharedCommandStore.keyboardHostDiagnosticSummary())
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+
+                                Text(
+                                    manualReturnNeedsSystemFallback
+                                        ? "系统没有提供可调用的返回目标，请点屏幕左上角的小字返回；若来自主屏幕或 Spotlight，请使用系统手势。"
+                                        : pendingReturnAttemptID != nil
+                                            ? "已请求系统返回，正在等待切换到刚才的 App…"
+                                        : canReturnToPreviousInterface
+                                            ? "点击下面的大按钮回到刚才的 App，录音会继续。"
+                                            : !hasCallableReturnTarget
+                                                ? "正在识别刚才的 App 和系统返回入口…"
+                                                : "录音和画中画准备完成后，返回按钮会自动可用。"
+                                )
+                                .font(.subheadline)
+
+                                Button {
+                                    returnToPreviousInterface()
+                                } label: {
+                                    Label(
+                                        "返回刚才的 App",
+                                        systemImage: "arrowshape.turn.up.backward.fill"
+                                    )
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 50)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!canReturnToPreviousInterface)
+                            }
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                manualReturnNeedsSystemFallback
+                                    ? Color.orange.opacity(0.12)
+                                    : Color.blue.opacity(0.1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
                     }
+
+                    NavigationLink {
+                        GettingStartedView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "sparkles.rectangle.stack")
+                                .font(.title3)
+                                .foregroundStyle(.blue)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("使用指南")
+                                    .font(.headline)
+
+                                Text(
+                                    keyboardAccessVerified
+                                        ? "键盘访问已验证 · 当前使用\(selectedProvider.shortTitle)识别"
+                                        : "完成键盘授权、状态验证和识别服务选择"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(
+                                    keyboardAccessVerified
+                                        ? Color.secondary
+                                        : Color.orange
+                                )
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(Color.blue.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     NavigationLink {
                         SpeechServiceSettingsView()
@@ -371,20 +529,25 @@ struct ContentView: View {
                             Spacer()
 
                             Button {
-                                pip.toggle()
+                                if pip.isPictureInPictureActive {
+                                    keepsPictureInPictureAlive = false
+                                    pip.stop()
+                                } else {
+                                    keepsPictureInPictureAlive = true
+                                    pip.start()
+                                }
                             } label: {
                                 Label(pip.buttonTitle, systemImage: pip.buttonIcon)
                             }
                             .buttonStyle(.bordered)
                         }
 
-                        PictureInPictureSourceView(coordinator: pip)
-                            .aspectRatio(16 / 9, contentMode: .fit)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(.quaternary)
-                            }
+                        Label(
+                            "来源视图已固定在窗口层，无需滚动到这里",
+                            systemImage: "pip"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                     .padding(14)
                     .background(.thinMaterial)
@@ -440,33 +603,70 @@ struct ContentView: View {
                 QuickPhraseLibraryView(store: quickPhraseStore)
             }
         }
+        .overlay(alignment: .topLeading) {
+            // AVKit requires a stable source view in the active window. Keeping
+            // it outside the ScrollView prevents PiP availability from depending
+            // on whether the old preview card has been scrolled onscreen.
+            PictureInPictureSourceView(coordinator: pip)
+                .frame(width: 44, height: 44)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .alert("AgenBoard", isPresented: $recorder.showsError) {
             Button("好") {}
         } message: {
             Text(recorder.errorMessage)
         }
+        .fullScreenCover(isPresented: $showsGettingStartedGuide) {
+            NavigationStack {
+                GettingStartedView(showsCompletionAction: true)
+            }
+        }
         .onAppear {
+            if !evaluatedInitialGuidePresentation {
+                evaluatedInitialGuidePresentation = true
+                showsGettingStartedGuide = !hasSeenGettingStartedGuide
+            }
+            keepsPictureInPictureAlive = true
+            SharedCommandStore.setBackgroundRecordingStartReady(
+                pip.isPictureInPictureActive
+            )
             configurePictureInPictureActions()
+            pip.prepareForAutomaticStart()
         }
         .onChange(of: recorder.isRecording) { _, isRecording in
             pip.setRecordingState(isRecording)
             if isRecording {
+                queuedRecordingStartRequest = nil
                 RecordingLaunchMetrics.mark(
                     "main_recording_state_ready",
                     request: activeLaunchRequest
                 )
             } else {
-                // A stashed system PiP remains represented by an edge chevron.
-                // Ending PiP with the recording removes that system-owned tab.
-                pip.stop()
+                pendingReturnAttemptID = nil
+                if activeLaunchRequest?.requiresForegroundRoundTrip != true {
+                    showsManualReturnGuidance = false
+                    manualReturnNeedsSystemFallback = false
+                    systemReturnActionIsReady = false
+                }
             }
-            returnToPreviousInterfaceIfReady()
+        }
+        .onChange(of: recorder.isTranscribing) { _, isTranscribing in
+            if !isTranscribing {
+                startQueuedRecordingIfReady()
+            }
         }
         .onChange(of: recorder.audioLevel) { _, level in
             pip.setAudioLevel(level)
         }
-        .onChange(of: pip.isPictureInPictureActive) { _, _ in
-            returnToPreviousInterfaceIfReady()
+        .onChange(of: pip.isPictureInPictureActive) { _, isActive in
+            SharedCommandStore.setBackgroundRecordingStartReady(isActive)
+            RecordingLaunchMetrics.mark(
+                isActive
+                    ? "main_background_recording_ready"
+                    : "main_background_recording_unavailable",
+                request: activeLaunchRequest
+            )
         }
         .onChange(of: pip.isPreparedForBackgroundTransition) { _, _ in
             if pip.isPreparedForBackgroundTransition {
@@ -475,10 +675,48 @@ struct ContentView: View {
                     request: activeLaunchRequest
                 )
             }
-            returnToPreviousInterfaceIfReady()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                keyboardAccessVerified =
+                    SharedCommandStore.latestKeyboardAccessVerification()?.isVerified == true
+                if pendingReturnAttemptID != nil {
+                    failPendingReturnAttempt(detail: "scene_became_active_before_background")
+                }
+                handleLatestSharedRecordingRequest()
+                startQueuedRecordingIfReady()
+                return
+            }
+
+            if phase == .background {
+                if pendingReturnAttemptID != nil {
+                    RecordingLaunchMetrics.mark(
+                        "main_manual_return_background_transitioned",
+                        request: activeLaunchRequest
+                    )
+                }
+                pendingReturnAttemptID = nil
+                showsManualReturnGuidance = false
+                manualReturnNeedsSystemFallback = false
+                systemReturnActionIsReady = false
+            }
+
+            guard keepsPictureInPictureAlive,
+                  phase == .inactive || phase == .background else {
+                return
+            }
+            RecordingLaunchMetrics.mark(
+                "main_background_transition_pip_requested",
+                request: activeLaunchRequest,
+                detail: "scene=\(String(describing: phase))"
+            )
+            pip.startForBackgroundTransition()
+        }
+        .task(id: showsManualReturnGuidance) {
+            await refreshSystemReturnActionReadiness()
         }
         .task {
             await observeKeyboardRecordingRequests()
@@ -498,6 +736,12 @@ struct ContentView: View {
             NotificationCenter.default.publisher(for: .aliyunCredentialDidChange)
         ) { _ in
             aliyunConfigured = AliyunCredentialStore.hasAPIKey
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .keyboardAccessVerificationDidChange)
+        ) { _ in
+            keyboardAccessVerified =
+                SharedCommandStore.latestKeyboardAccessVerification()?.isVerified == true
         }
     }
 
@@ -523,26 +767,30 @@ struct ContentView: View {
             detail: url.absoluteString
         )
 
-        if shouldReturnToPreviousInterface(from: url) {
-            shouldReturnToPreviousInterface = true
-            returnHostBundleIdentifier =
-                SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
+        if requiresManualReturn(from: url) {
+            showsManualReturnGuidance = true
+            manualReturnNeedsSystemFallback = false
+            systemReturnActionIsReady = false
         }
 
         if let request = incomingRequest {
-            handleRecordingRequest(request)
+            handleRecordingRequest(request, allowsForegroundRetry: true)
         } else {
-            if shouldReturnToPreviousInterface(from: url) {
+            keepsPictureInPictureAlive = true
+            if requiresManualReturn(from: url) {
                 pip.prepareForAutomaticStart()
             } else {
                 pip.start()
             }
-            recorder.toggleRecording()
-        }
 
-        returnToPreviousInterfaceIfReady()
+            let command = recordingCommand(from: url) ?? .start
+            switch command {
+            case .start:
+                recorder.startRecordingIfNeeded()
+            case .stop:
+                recorder.stopRecordingAndTranscribeIfNeeded()
+            }
+        }
     }
 
     private func configurePictureInPictureActions() {
@@ -551,6 +799,8 @@ struct ContentView: View {
                 "main_pip_closed_by_user",
                 request: activeLaunchRequest
             )
+            keepsPictureInPictureAlive = false
+            SharedCommandStore.setBackgroundRecordingStartReady(false)
             recorder.stopRecordingAndTranscribeIfNeeded()
         }
 
@@ -559,10 +809,12 @@ struct ContentView: View {
                 "main_pip_restore_requested",
                 request: activeLaunchRequest
             )
-            shouldReturnToPreviousInterface = false
-            isReturnToPreviousInterfaceScheduled = false
-            returnHostBundleIdentifier = nil
+            showsManualReturnGuidance = false
+            manualReturnNeedsSystemFallback = false
+            activeLaunchRequest = nil
             showsQuickPhraseLibrary = false
+            keepsPictureInPictureAlive = true
+            SharedCommandStore.setBackgroundRecordingStartReady(false)
         }
     }
 
@@ -611,19 +863,22 @@ struct ContentView: View {
             return nil
         }
 
-        let shouldReturn = shouldReturnToPreviousInterface(from: url)
+        let requiresForegroundRoundTrip = requiresManualReturn(from: url)
+        let urlSourceHost = sourceHostCapture(from: components)
 
         if let sharedRequest = SharedCommandStore.latestRecordingToggleRequest(),
            sharedRequest.id == requestID {
             return SharedRecordingToggleRequest(
                 id: sharedRequest.id,
                 requestedAt: sharedRequest.requestedAt,
-                shouldReturnToPreviousInterface: shouldReturn
-                    || sharedRequest.shouldReturnToPreviousInterface,
-                sourceHostBundleIdentifier:
-                    sharedRequest.sourceHostBundleIdentifier
+                requiresForegroundRoundTrip: requiresForegroundRoundTrip
+                    || sharedRequest.requiresForegroundRoundTrip,
+                command: sharedRequest.command,
+                sourceHost: sharedRequest.sourceHost ?? urlSourceHost
             )
         }
+
+        let command = recordingCommand(from: url) ?? .start
 
         if let requestedAtValue = components.queryItems?
             .first(where: { $0.name == "requestedAt" })?.value,
@@ -631,43 +886,129 @@ struct ContentView: View {
             return SharedRecordingToggleRequest(
                 id: requestID,
                 requestedAt: requestedAt,
-                shouldReturnToPreviousInterface: shouldReturn,
-                sourceHostBundleIdentifier:
-                    SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                        maxAge: 300
-                    )
+                requiresForegroundRoundTrip: requiresForegroundRoundTrip,
+                command: command,
+                sourceHost: urlSourceHost
             )
         }
 
         return SharedRecordingToggleRequest(
             id: requestID,
             requestedAt: Date().timeIntervalSince1970,
-            shouldReturnToPreviousInterface: shouldReturn,
-            sourceHostBundleIdentifier:
-                SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
+            requiresForegroundRoundTrip: requiresForegroundRoundTrip,
+            command: command,
+            sourceHost: urlSourceHost
         )
     }
 
-    private func handleRecordingRequest(_ request: SharedRecordingToggleRequest) {
+    private func sourceHostCapture(
+        from components: URLComponents
+    ) -> SharedKeyboardHostCapture? {
+        let queryItems = components.queryItems ?? []
+        guard let bundleIdentifier = queryItems.first(
+            where: { $0.name == "sourceHostBundleIdentifier" }
+        )?.value,
+        let capturedAtValue = queryItems.first(
+            where: { $0.name == "sourceHostCapturedAt" }
+        )?.value,
+        let capturedAt = TimeInterval(capturedAtValue),
+        let generation = queryItems.first(
+            where: { $0.name == "sourceHostGeneration" }
+        )?.value,
+        !generation.isEmpty else {
+            return nil
+        }
+
+        return SharedKeyboardHostCapture(
+            bundleIdentifier: bundleIdentifier,
+            capturedAt: capturedAt,
+            generation: generation,
+            kind: SharedCommandStore.hostKind(for: bundleIdentifier)
+        )
+    }
+
+    private func recordingCommand(from url: URL) -> SharedRecordingCommand? {
+        guard let rawValue = URLComponents(
+            url: url,
+            resolvingAgainstBaseURL: false
+        )?.queryItems?.first(where: { $0.name == "command" })?.value else {
+            return nil
+        }
+        return SharedRecordingCommand(rawValue: rawValue)
+    }
+
+    private func handleRecordingRequest(
+        _ request: SharedRecordingToggleRequest,
+        allowsForegroundRetry: Bool = false
+    ) {
         let age = Date().timeIntervalSince1970 - request.requestedAt
         guard age >= -2, age < recordingRequestLifetime else {
             return
         }
 
-        guard !handledRecordingRequestIDs.contains(request.id),
-              request.id != SharedCommandStore.latestHandledRecordingToggleRequestID() else {
+        let wasAlreadyHandled = handledRecordingRequestIDs.contains(request.id)
+            || request.id == SharedCommandStore.latestHandledRecordingToggleRequestID()
+        if wasAlreadyHandled {
+            if activeLaunchRequest?.id == request.id,
+               activeLaunchRequest?.sourceHost == nil,
+               let sourceHost = request.sourceHost {
+                activeLaunchRequest = request
+                manualReturnNeedsSystemFallback = false
+                RecordingLaunchMetrics.mark(
+                    "main_late_host_capture_attached",
+                    request: request,
+                    detail: String(
+                        format: "bundle=%@ offset_ms=%.1f",
+                        sourceHost.bundleIdentifier,
+                        (sourceHost.capturedAt - request.requestedAt) * 1_000
+                    )
+                )
+            }
+
+            let response = SharedCommandStore.latestRecordingRequestResponse()
+            let canRetryFailedStart = allowsForegroundRetry
+                && scenePhase == .active
+                && request.command == .start
+                && !recorder.isRecording
+                && !retriedFailedRecordingRequestIDs.contains(request.id)
+                && response?.requestID == request.id
+                && response?.phase == .failed
+            guard canRetryFailedStart else {
+                return
+            }
+            retriedFailedRecordingRequestIDs.insert(request.id)
+        }
+
+        // A live App-Group request gets one background start attempt while PiP
+        // keeps the process responsive. Cold/fallback requests wait until their
+        // URL launch makes the scene active, avoiding a foreground race.
+        let requiresForeground = request.command == .start
+            && !recorder.isRecording
+            && request.requiresForegroundRoundTrip
+        guard !requiresForeground || scenePhase == .active else {
+            if deferredRecordingRequestID != request.id {
+                deferredRecordingRequestID = request.id
+                RecordingLaunchMetrics.mark(
+                    "main_recording_request_deferred_until_active",
+                    request: request,
+                    detail: "scene=\(String(describing: scenePhase))"
+                )
+            }
             return
         }
 
-        if request.shouldReturnToPreviousInterface {
-            shouldReturnToPreviousInterface = true
-            returnHostBundleIdentifier =
-                request.sourceHostBundleIdentifier
-                ?? SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
+        if deferredRecordingRequestID == request.id {
+            deferredRecordingRequestID = nil
+            RecordingLaunchMetrics.mark(
+                "main_recording_request_resumed_in_foreground",
+                request: request
+            )
+        }
+
+        if request.requiresForegroundRoundTrip {
+            showsManualReturnGuidance = true
+            manualReturnNeedsSystemFallback = false
+            systemReturnActionIsReady = false
         }
 
         activeLaunchRequest = request
@@ -678,87 +1019,286 @@ struct ContentView: View {
 
         handledRecordingRequestIDs.insert(request.id)
         SharedCommandStore.markRecordingToggleRequestHandled(request.id)
+        SharedCommandStore.updateRecordingRequestResponse(
+            for: request,
+            phase: .accepted
+        )
 
-        if request.shouldReturnToPreviousInterface {
+        keepsPictureInPictureAlive = true
+        if request.requiresForegroundRoundTrip {
             pip.prepareForAutomaticStart()
         } else if !pip.isPictureInPictureActive {
             pip.start()
         }
-        recorder.toggleRecording(request: request)
+
+        switch request.command {
+        case .start:
+            if recorder.isRecording {
+                SharedCommandStore.updateRecordingRequestResponse(
+                    for: request,
+                    phase: .recording
+                )
+            } else if recorder.isTranscribing {
+                queuedRecordingStartRequest = request
+                SharedCommandStore.updateRecordingRequestResponse(
+                    for: request,
+                    phase: .accepted,
+                    message: "上一段语音识别完成后将自动开始录音"
+                )
+                RecordingLaunchMetrics.mark(
+                    "main_recording_start_queued_after_transcription",
+                    request: request
+                )
+            } else {
+                recorder.startRecordingIfNeeded(request: request)
+            }
+        case .stop:
+            queuedRecordingStartRequest = nil
+            recorder.stopRecordingAndTranscribeIfNeeded()
+            SharedCommandStore.updateRecordingRequestResponse(
+                for: request,
+                phase: .stopped
+            )
+        }
     }
 
-    private func shouldReturnToPreviousInterface(from url: URL) -> Bool {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?
-            .contains(where: { $0.name == "returnToPrevious" && $0.value == "1" }) == true
-    }
-
-    private func returnToPreviousInterfaceIfReady() {
-        guard shouldReturnToPreviousInterface else {
+    private func startQueuedRecordingIfReady() {
+        guard scenePhase == .active,
+              !recorder.isRecording,
+              !recorder.isTranscribing,
+              let request = queuedRecordingStartRequest else {
             return
         }
 
-        guard !isReturnToPreviousInterfaceScheduled,
-              (pip.isPictureInPictureActive || pip.isPreparedForBackgroundTransition),
-              recorder.isRecording else {
-            print(
-                "[AgenBoardReturn] 等待返回条件："
-                    + "pip=\(pip.isPictureInPictureActive), "
-                    + "prepared=\(pip.isPreparedForBackgroundTransition), "
-                    + "recording=\(recorder.isRecording)"
+        queuedRecordingStartRequest = nil
+        keepsPictureInPictureAlive = true
+        if request.requiresForegroundRoundTrip {
+            showsManualReturnGuidance = true
+            pip.prepareForAutomaticStart()
+        }
+        SharedCommandStore.updateRecordingRequestResponse(
+            for: request,
+            phase: .accepted,
+            message: "上一段识别完成，正在开始录音"
+        )
+        RecordingLaunchMetrics.mark(
+            "main_recording_start_resumed_after_transcription",
+            request: request
+        )
+        recorder.startRecordingIfNeeded(request: request)
+    }
+
+    private func returnToPreviousInterface() {
+        guard canReturnToPreviousInterface else {
+            return
+        }
+
+        RecordingLaunchMetrics.mark(
+            "main_manual_return_button_tapped",
+            request: activeLaunchRequest
+        )
+        let attemptID = UUID()
+        pendingReturnAttemptID = attemptID
+        let responseSent = SystemNavigationReturnAction.perform()
+        RecordingLaunchMetrics.mark(
+            responseSent
+                ? "main_manual_return_response_sent"
+                : "main_manual_return_response_rejected",
+            request: activeLaunchRequest
+        )
+
+        guard responseSent else {
+            attemptHostApplicationReturn(
+                attemptID: attemptID,
+                reason: SystemNavigationReturnAction.diagnosticDetail()
             )
             return
         }
 
-        isReturnToPreviousInterfaceScheduled = true
+        scheduleReturnVerification(
+            attemptID: attemptID,
+            stage: .systemNavigation
+        )
+    }
 
+    private func attemptHostApplicationReturn(
+        attemptID: UUID,
+        reason: String
+    ) {
+        guard pendingReturnAttemptID == attemptID,
+              let bundleIdentifier = returnHostBundleIdentifier else {
+            failPendingReturnAttempt(detail: "host_unavailable_after_\(reason)")
+            return
+        }
+
+        let didOpen = HostApplicationReturnAction.openApplication(
+            bundleIdentifier: bundleIdentifier
+        )
+        RecordingLaunchMetrics.mark(
+            didOpen
+                ? "main_host_application_return_requested"
+                : "main_host_application_return_rejected",
+            request: activeLaunchRequest,
+            detail: "bundle=\(bundleIdentifier) reason=\(reason)"
+        )
+        guard didOpen else {
+            attemptKnownURLSchemeReturn(
+                attemptID: attemptID,
+                bundleIdentifier: bundleIdentifier,
+                reason: "bundle_open_rejected"
+            )
+            return
+        }
+
+        scheduleReturnVerification(
+            attemptID: attemptID,
+            stage: .hostApplication
+        )
+    }
+
+    private func attemptKnownURLSchemeReturn(
+        attemptID: UUID,
+        bundleIdentifier: String,
+        reason: String
+    ) {
+        guard pendingReturnAttemptID == attemptID,
+              let fallbackURL = HostApplicationReturnAction.knownURL(
+                for: bundleIdentifier
+              ) else {
+            failPendingReturnAttempt(detail: "url_scheme_unavailable_after_\(reason)")
+            return
+        }
+
+        UIApplication.shared.open(fallbackURL, options: [:]) { success in
+            Task { @MainActor in
+                guard pendingReturnAttemptID == attemptID else {
+                    return
+                }
+                RecordingLaunchMetrics.mark(
+                    success
+                        ? "main_host_url_return_requested"
+                        : "main_host_url_return_rejected",
+                    request: activeLaunchRequest,
+                    detail: "bundle=\(bundleIdentifier) url=\(fallbackURL.absoluteString)"
+                )
+                guard success else {
+                    failPendingReturnAttempt(detail: "url_scheme_rejected")
+                    return
+                }
+                scheduleReturnVerification(
+                    attemptID: attemptID,
+                    stage: .knownURLScheme
+                )
+            }
+        }
+    }
+
+    private func scheduleReturnVerification(
+        attemptID: UUID,
+        stage: ReturnAttemptStage
+    ) {
         Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 1_500_000_000)
+            } catch {
+                return
+            }
+
+            guard pendingReturnAttemptID == attemptID,
+                  scenePhase != .background else {
+                return
+            }
+
+            switch stage {
+            case .systemNavigation:
+                attemptHostApplicationReturn(
+                    attemptID: attemptID,
+                    reason: "system_background_transition_timeout"
+                )
+            case .hostApplication:
+                guard let bundleIdentifier = returnHostBundleIdentifier else {
+                    failPendingReturnAttempt(detail: "host_target_lost")
+                    return
+                }
+                attemptKnownURLSchemeReturn(
+                    attemptID: attemptID,
+                    bundleIdentifier: bundleIdentifier,
+                    reason: "bundle_background_transition_timeout"
+                )
+            case .knownURLScheme:
+                failPendingReturnAttempt(detail: "url_background_transition_timeout")
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshSystemReturnActionReadiness() async {
+        guard showsManualReturnGuidance else {
+            systemReturnActionIsReady = false
+            return
+        }
+
+        for _ in 0..<30 {
+            guard !Task.isCancelled,
+                  showsManualReturnGuidance,
+                  pendingReturnAttemptID == nil else {
+                return
+            }
+
+            if SystemNavigationReturnAction.isAvailable() {
+                systemReturnActionIsReady = true
+                manualReturnNeedsSystemFallback = false
+                RecordingLaunchMetrics.mark(
+                    "main_manual_return_action_ready",
+                    request: activeLaunchRequest
+                )
+                return
+            }
+
             do {
                 try await Task.sleep(nanoseconds: 100_000_000)
             } catch {
-                isReturnToPreviousInterfaceScheduled = false
                 return
-            }
-
-            guard shouldReturnToPreviousInterface,
-                  (pip.isPictureInPictureActive || pip.isPreparedForBackgroundTransition),
-                  recorder.isRecording else {
-                isReturnToPreviousInterfaceScheduled = false
-                return
-            }
-
-            shouldReturnToPreviousInterface = false
-            isReturnToPreviousInterfaceScheduled = false
-
-            let hostBundleIdentifier = returnHostBundleIdentifier
-                ?? SharedCommandStore.latestRecentKeyboardHostBundleIdentifier(
-                    maxAge: 300
-                )
-            RecordingLaunchMetrics.mark(
-                "main_return_attempt_started",
-                request: activeLaunchRequest,
-                detail: hostBundleIdentifier ?? "host_unavailable"
-            )
-            let restored = await PreviousInterfaceRestorer.restore(
-                hostBundleIdentifier: hostBundleIdentifier
-            )
-            RecordingLaunchMetrics.mark(
-                restored ? "main_return_succeeded" : "main_return_failed",
-                request: activeLaunchRequest,
-                detail: hostBundleIdentifier ?? "host_unavailable"
-            )
-            print("[AgenBoardReturn] 返回上一个 App：\(restored)")
-
-            if restored {
-                returnHostBundleIdentifier = nil
-                activeLaunchRequest = nil
-            } else {
-                recorder.status =
-                    "画中画已启动，自动返回失败（"
-                    + "\(hostBundleIdentifier ?? "未捕获宿主 App")）"
-                recorder.publishCurrentSnapshot()
             }
         }
+
+        guard showsManualReturnGuidance,
+              pendingReturnAttemptID == nil else {
+            return
+        }
+        systemReturnActionIsReady = false
+        manualReturnNeedsSystemFallback = returnHostBundleIdentifier == nil
+        RecordingLaunchMetrics.mark(
+            "main_manual_return_action_unavailable",
+            request: activeLaunchRequest,
+            detail: SystemNavigationReturnAction.diagnosticDetail()
+        )
+    }
+
+    private func failPendingReturnAttempt(detail: String) {
+        guard pendingReturnAttemptID != nil else {
+            return
+        }
+
+        pendingReturnAttemptID = nil
+        systemReturnActionIsReady = false
+        manualReturnNeedsSystemFallback = returnHostBundleIdentifier == nil
+        recorder.status = "无法自动返回，请使用系统左上角入口或底部手势"
+        recorder.publishCurrentSnapshot()
+        RecordingLaunchMetrics.mark(
+            "main_manual_return_failed",
+            request: activeLaunchRequest,
+            detail: detail
+        )
+    }
+
+    private func requiresManualReturn(from url: URL) -> Bool {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .contains(where: { item in
+                (item.name == "manualReturn" || item.name == "returnToPrevious")
+                    && item.value == "1"
+            }) == true
     }
 }
 
@@ -806,45 +1346,84 @@ private let sharedRecordingRequestNotificationCallback: CFNotificationCallback =
     }
 }
 
-private enum PreviousInterfaceRestorer {
+// This intentionally invokes only the system-owned back navigation action that
+// is already represented by iOS in the status bar. It does not identify the
+// keyboard host, open an arbitrary bundle identifier, or modify keyboard state.
+private enum SystemNavigationReturnAction {
     @MainActor
-    static func restore(hostBundleIdentifier: String?) async -> Bool {
-        let application = UIApplication.shared
-
-        if restoreUsingSystemNavigationAction(application) {
-            return true
-        }
-
-        if let hostBundleIdentifier,
-           restoreUsingHostApplication(hostBundleIdentifier) {
-            return true
-        }
-
-        for _ in 0..<3 {
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            if restoreUsingSystemNavigationAction(application) {
-                return true
-            }
-        }
-
-        if let hostBundleIdentifier,
-           restoreUsingHostApplication(hostBundleIdentifier) {
-            return true
-        }
-
-        print(
-            "[AgenBoardReturn] 无法返回宿主 App，捕获的 Bundle ID："
-                + "\(hostBundleIdentifier ?? "无")"
-        )
-        return false
+    static func isAvailable() -> Bool {
+        resolvedAction() != nil
     }
 
     @MainActor
-    private static func restoreUsingSystemNavigationAction(
-        _ application: UIApplication
-    ) -> Bool {
-        guard let action = systemNavigationAction(from: application) else {
+    static func perform() -> Bool {
+        guard let resolvedAction = resolvedAction() else {
             return false
+        }
+
+        let responseSelector = NSSelectorFromString(
+            "sendResponseForDestination:"
+        )
+        typealias SendResponseImplementation = @convention(c) (
+            AnyObject,
+            Selector,
+            UInt
+        ) -> Bool
+        let sendResponse = unsafeBitCast(
+            resolvedAction.action.method(for: responseSelector),
+            to: SendResponseImplementation.self
+        )
+        return sendResponse(
+            resolvedAction.action,
+            responseSelector,
+            resolvedAction.destination
+        )
+    }
+
+    @MainActor
+    static func diagnosticDetail() -> String {
+        guard let action = action(from: UIApplication.shared) else {
+            return "system_action_missing"
+        }
+
+        let canSendSelector = NSSelectorFromString("canSendResponse")
+        if action.responds(to: canSendSelector) {
+            typealias CanSendImplementation = @convention(c) (
+                AnyObject,
+                Selector
+            ) -> Bool
+            let canSend = unsafeBitCast(
+                action.method(for: canSendSelector),
+                to: CanSendImplementation.self
+            )
+            if !canSend(action, canSendSelector) {
+                return "system_action_cannot_send"
+            }
+        }
+
+        let destinationsSelector = NSSelectorFromString("destinations")
+        guard action.responds(to: destinationsSelector) else {
+            return "system_destinations_selector_missing"
+        }
+        guard let destinations = action.perform(destinationsSelector)?
+            .takeUnretainedValue() as? NSArray,
+            destinations.firstObject is NSNumber else {
+            return "system_destinations_empty"
+        }
+
+        let responseSelector = NSSelectorFromString(
+            "sendResponseForDestination:"
+        )
+        guard action.responds(to: responseSelector) else {
+            return "system_response_selector_missing"
+        }
+        return "system_action_ready"
+    }
+
+    @MainActor
+    private static func resolvedAction() -> (action: NSObject, destination: UInt)? {
+        guard let action = action(from: UIApplication.shared) else {
+            return nil
         }
 
         let canSendSelector = NSSelectorFromString("canSendResponse")
@@ -858,53 +1437,28 @@ private enum PreviousInterfaceRestorer {
                 to: CanSendImplementation.self
             )
             guard canSend(action, canSendSelector) else {
-                return false
+                return nil
             }
         }
 
         let destinationsSelector = NSSelectorFromString("destinations")
-
-        guard action.responds(to: destinationsSelector),
-              let destinations = action.perform(destinationsSelector)?
-                .takeUnretainedValue() as? NSArray,
-              let firstDestination = destinations.firstObject as? NSNumber else {
-            return false
-        }
-
         let responseSelector = NSSelectorFromString(
             "sendResponseForDestination:"
         )
-
-        guard action.responds(to: responseSelector) else {
-            print("[AgenBoardReturn] 系统返回导航动作无法发送响应")
-            return false
+        guard action.responds(to: destinationsSelector),
+              action.responds(to: responseSelector),
+              let destinations = action.perform(destinationsSelector)?
+                .takeUnretainedValue() as? NSArray,
+              let firstDestination = destinations.firstObject as? NSNumber else {
+            return nil
         }
 
-        typealias SendResponseImplementation = @convention(c) (
-            AnyObject,
-            Selector,
-            UInt
-        ) -> Bool
-
-        let implementation = action.method(for: responseSelector)
-        let sendResponse = unsafeBitCast(
-            implementation,
-            to: SendResponseImplementation.self
-        )
-        let destination = firstDestination.uintValue
-        let didSend = sendResponse(action, responseSelector, destination)
-        print(
-            "[AgenBoardReturn] 系统导航返回目标 \(destination)：\(didSend)"
-        )
-        return didSend
+        return (action, firstDestination.uintValue)
     }
 
     @MainActor
-    private static func systemNavigationAction(
-        from application: UIApplication
-    ) -> NSObject? {
+    private static func action(from application: UIApplication) -> NSObject? {
         let actionSelector = NSSelectorFromString("_systemNavigationAction")
-
         if application.responds(to: actionSelector),
            let action = application.perform(actionSelector)?
             .takeUnretainedValue() as? NSObject {
@@ -917,36 +1471,31 @@ private enum PreviousInterfaceRestorer {
         ) else {
             return nil
         }
-
         return object_getIvar(application, actionVariable) as? NSObject
     }
+}
 
+private enum HostApplicationReturnAction {
     @MainActor
-    private static func restoreUsingHostApplication(
-        _ bundleIdentifier: String
-    ) -> Bool {
-        guard !bundleIdentifier.hasPrefix("dev.local.agenboard") else {
+    static func openApplication(bundleIdentifier: String) -> Bool {
+        guard SharedCommandStore.isReturnableHostBundleIdentifier(
+            bundleIdentifier
+        ) else {
             return false
         }
 
         if NSClassFromString("LSApplicationWorkspace") == nil {
             let frameworkPath =
-                "/System/Library/Frameworks/"
-                + "MobileCoreServices.framework"
+                "/System/Library/Frameworks/MobileCoreServices.framework"
             _ = Bundle(path: frameworkPath)?.load()
         }
 
-        let defaultWorkspaceSelector = NSSelectorFromString(
-            "defaultWorkspace"
-        )
-        guard let workspaceClass = NSClassFromString(
-            "LSApplicationWorkspace"
-        ),
-        let workspaceMethod = class_getClassMethod(
-            workspaceClass,
-            defaultWorkspaceSelector
-        ) else {
-            print("[AgenBoardReturn] LaunchServices 工作区不可用")
+        let defaultWorkspaceSelector = NSSelectorFromString("defaultWorkspace")
+        guard let workspaceClass = NSClassFromString("LSApplicationWorkspace"),
+              let workspaceMethod = class_getClassMethod(
+                workspaceClass,
+                defaultWorkspaceSelector
+              ) else {
             return false
         }
 
@@ -958,7 +1507,6 @@ private enum PreviousInterfaceRestorer {
             method_getImplementation(workspaceMethod),
             to: DefaultWorkspaceImplementation.self
         )
-
         guard let workspace = defaultWorkspace(
             workspaceClass,
             defaultWorkspaceSelector
@@ -966,9 +1514,7 @@ private enum PreviousInterfaceRestorer {
             return false
         }
 
-        let openSelector = NSSelectorFromString(
-            "openApplicationWithBundleID:"
-        )
+        let openSelector = NSSelectorFromString("openApplicationWithBundleID:")
         guard workspace.responds(to: openSelector) else {
             return false
         }
@@ -982,15 +1528,22 @@ private enum PreviousInterfaceRestorer {
             workspace.method(for: openSelector),
             to: OpenApplicationImplementation.self
         )
-        let didOpen = openApplication(
+        return openApplication(
             workspace,
             openSelector,
             bundleIdentifier as NSString
         )
-        print(
-            "[AgenBoardReturn] 激活宿主 \(bundleIdentifier)：\(didOpen)"
-        )
-        return didOpen
+    }
+
+    static func knownURL(for bundleIdentifier: String) -> URL? {
+        switch bundleIdentifier.lowercased() {
+        case "md.obsidian":
+            return URL(string: "obsidian://")
+        case "com.xingin.discover":
+            return URL(string: "xhsdiscover://")
+        default:
+            return nil
+        }
     }
 }
 

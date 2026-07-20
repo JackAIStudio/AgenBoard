@@ -1,7 +1,10 @@
 import UIKit
-import ObjectiveC.runtime
 
-final class KeyboardViewController: UIInputViewController {
+final class KeyboardViewController: UIInputViewController,
+    UICollectionViewDataSource,
+    UICollectionViewDelegateFlowLayout {
+    private static let pinyinCandidatePageSize = 48
+    private static let pinyinCandidateCellIdentifier = "PinyinCandidateCell"
     private enum ContentModule: Int {
         case voice = 0
         case phrases = 1
@@ -70,7 +73,7 @@ final class KeyboardViewController: UIInputViewController {
     private let keyboardModuleStack = UIStackView()
     private var moduleButtons: [ContentModule: UIButton] = [:]
     private var selectedContentModule = ContentModule.voice
-    private var isQuickPhraseModuleVisible = true
+    private var isQuickPhraseModuleVisible = false
     private let statusLabel = UILabel()
     private var recordingButton: UIButton?
     private var recordingButtonWidthConstraint: NSLayoutConstraint?
@@ -85,7 +88,11 @@ final class KeyboardViewController: UIInputViewController {
     private weak var pinyinCandidateStack: UIStackView?
     private weak var pinyinCandidateScrollView: UIScrollView?
     private weak var pinyinCandidateExpansionButton: UIButton?
+    private weak var expandedPinyinCandidateCollectionView: UICollectionView?
     private var isPinyinCandidatePanelExpanded = false
+    private var hasMorePinyinCandidates = false
+    private var isLoadingMorePinyinCandidates = false
+    private var nextPinyinCandidateOffset = 0
     private var typingLetterButtons: [(button: UIButton, value: String)] = []
     private weak var shiftButton: UIButton?
     private var shiftState = ShiftState.off
@@ -107,7 +114,11 @@ final class KeyboardViewController: UIInputViewController {
     private var insertionMessageUntil: TimeInterval = 0
     private var appLaunchRequestedAt: TimeInterval?
     private var appOpenVerificationTask: Task<Void, Never>?
+    private var recordingCommandFallbackTask: Task<Void, Never>?
     private var hostCaptureTask: Task<Void, Never>?
+    private var hostPrefetchTask: Task<Void, Never>?
+    private var hostPresentationStartedAt: TimeInterval?
+    private var presentationHostCapture: SharedKeyboardHostCapture?
     private var launchFailureMessage: String?
     private var launchFailureMessageUntil: TimeInterval = 0
     private var hasStartedPinyinWarmup = false
@@ -136,10 +147,13 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        SharedCommandStore.respondToKeyboardAccessVerification(
+            hasFullAccess: hasFullAccess
+        )
         hapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
         refreshQuickPhraseModuleVisibility()
         reloadPhraseModule()
-        prefetchHostBundleIdentifier()
+        prepareHostCaptureForCurrentPresentation()
         startSnapshotTimer()
     }
 
@@ -147,8 +161,13 @@ final class KeyboardViewController: UIInputViewController {
         super.viewDidDisappear(animated)
         endCursorTracking(refreshSnapshot: false)
         stopDeleting()
+        recordingCommandFallbackTask?.cancel()
+        recordingCommandFallbackTask = nil
         hostCaptureTask?.cancel()
         hostCaptureTask = nil
+        hostPrefetchTask?.cancel()
+        hostPrefetchTask = nil
+        finishHostCaptureForCurrentPresentation()
         stopSnapshotTimer()
     }
 
@@ -298,6 +317,8 @@ final class KeyboardViewController: UIInputViewController {
         pinyinCandidateStack = nil
         pinyinCandidateScrollView = nil
         pinyinCandidateExpansionButton = nil
+        expandedPinyinCandidateCollectionView = nil
+        isLoadingMorePinyinCandidates = false
     }
 
     private func makeModuleSwitcher() -> UIView {
@@ -419,7 +440,7 @@ final class KeyboardViewController: UIInputViewController {
         self.recordingLevelView = recordingLevelView
 
         let returnButton = makeVoiceUtilityButton(
-            title: "回车键",
+            systemImage: "return",
             accessibilityLabel: "回车键",
             action: #selector(insertReturn),
             width: 112
@@ -432,7 +453,7 @@ final class KeyboardViewController: UIInputViewController {
             style: .secondary
         )
         let spaceButton = makeVoiceUtilityButton(
-            title: "空格",
+            systemImage: "space",
             accessibilityLabel: "空格",
             action: #selector(insertSpace),
             width: 112
@@ -456,22 +477,36 @@ final class KeyboardViewController: UIInputViewController {
 
         NSLayoutConstraint.activate([
             canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 184),
-            statusLabel.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 2),
+            statusLabel.topAnchor.constraint(equalTo: recordingButton.bottomAnchor, constant: 2),
             statusLabel.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
             statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: canvas.leadingAnchor, constant: 58),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: canvas.trailingAnchor, constant: -58),
 
             recordingButton.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            recordingButton.centerYAnchor.constraint(equalTo: canvas.topAnchor, constant: 76),
+            recordingButton.centerYAnchor.constraint(equalTo: canvas.topAnchor, constant: 36),
             widthConstraint,
             heightConstraint,
 
             textInputButtonRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            textInputButtonRow.bottomAnchor.constraint(equalTo: canvas.bottomAnchor, constant: -2),
+            textInputButtonRow.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 132),
+            textInputButtonRow.topAnchor.constraint(
+                greaterThanOrEqualTo: statusLabel.bottomAnchor,
+                constant: 2
+            ),
+            textInputButtonRow.bottomAnchor.constraint(
+                lessThanOrEqualTo: canvas.bottomAnchor,
+                constant: -10
+            ),
 
-            deleteButton.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -4),
-            deleteButton.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 36),
-            atButton.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -4),
+            deleteButton.leadingAnchor.constraint(
+                equalTo: textInputButtonRow.trailingAnchor,
+                constant: 9
+            ),
+            deleteButton.centerYAnchor.constraint(
+                equalTo: recordingButton.centerYAnchor,
+                constant: 7
+            ),
+            atButton.centerXAnchor.constraint(equalTo: deleteButton.centerXAnchor),
             atButton.topAnchor.constraint(equalTo: deleteButton.bottomAnchor, constant: 8)
         ])
 
@@ -590,15 +625,20 @@ final class KeyboardViewController: UIInputViewController {
         headerRow?.isHidden = showsExpandedCandidates
 
         if showsExpandedCandidates {
-            pinyinCandidates = PinyinInputEngine.candidates(
+            let page = PinyinInputEngine.firstCandidatePage(
                 for: pinyinComposition,
-                limit: 48
+                limit: Self.pinyinCandidatePageSize
             )
+            pinyinCandidates = page.candidates
+            hasMorePinyinCandidates = page.hasMore
+            nextPinyinCandidateOffset = page.nextOffset
             keyboardModuleStack.addArrangedSubview(makeExpandedPinyinCandidatePanel())
             return
         }
 
         isPinyinCandidatePanelExpanded = false
+        hasMorePinyinCandidates = false
+        nextPinyinCandidateOffset = 0
         headerRow?.isHidden = false
         updateHeaderLeadingContent()
 
@@ -827,122 +867,151 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func makeExpandedPinyinCandidatePanel() -> UIView {
-        let candidates = pinyinCandidates.isEmpty
-            ? [pinyinComposition]
-            : pinyinCandidates
-        let contentStack = UIStackView()
-        contentStack.axis = .vertical
-        contentStack.alignment = .fill
-        contentStack.spacing = 7
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-
-        var candidateIndex = 0
-        var isFirstRow = true
-        while candidateIndex < candidates.count {
-            let candidateCapacity = isFirstRow ? 5 : 6
-            let endIndex = min(candidateIndex + candidateCapacity, candidates.count)
-            var views: [UIView] = []
-
-            for index in candidateIndex..<endIndex {
-                views.append(
-                    makeExpandedCandidateButton(
-                        title: candidates[index],
-                        value: candidates[index],
-                        isPrimary: index == 0
-                    )
-                )
-            }
-
-            while views.count < candidateCapacity {
-                views.append(UIView())
-            }
-
-            if isFirstRow {
-                var collapseConfiguration = UIButton.Configuration.plain()
-                collapseConfiguration.image = UIImage(systemName: "chevron.up")
-                collapseConfiguration.preferredSymbolConfigurationForImage = .init(
-                    pointSize: 14,
-                    weight: .semibold
-                )
-                collapseConfiguration.baseForegroundColor = .secondaryLabel
-                collapseConfiguration.contentInsets = .zero
-                let collapseButton = UIButton(configuration: collapseConfiguration)
-                collapseButton.addTarget(
-                    self,
-                    action: #selector(collapsePinyinCandidates),
-                    for: .touchUpInside
-                )
-                addHapticFeedback(to: collapseButton, selection: true)
-                collapseButton.accessibilityLabel = "收起候选词"
-                views.append(collapseButton)
-            }
-
-            let row = UIStackView(arrangedSubviews: views)
-            row.axis = .horizontal
-            row.alignment = .fill
-            row.distribution = .fillEqually
-            row.spacing = 5
-            row.heightAnchor.constraint(equalToConstant: 43).isActive = true
-            contentStack.addArrangedSubview(row)
-
-            candidateIndex = endIndex
-            isFirstRow = false
+        if pinyinCandidates.isEmpty {
+            pinyinCandidates = [pinyinComposition]
+            hasMorePinyinCandidates = false
         }
 
-        let scrollView = UIScrollView()
-        scrollView.alwaysBounceVertical = true
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.addSubview(contentStack)
+        let layout = UICollectionViewFlowLayout()
+        layout.scrollDirection = .vertical
+        layout.minimumInteritemSpacing = 5
+        layout.minimumLineSpacing = 7
+        layout.sectionInset = .init(top: 3, left: 3, bottom: 4, right: 3)
 
-        NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.leadingAnchor,
-                constant: 3
-            ),
-            contentStack.trailingAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.trailingAnchor,
-                constant: -3
-            ),
-            contentStack.topAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.topAnchor,
-                constant: 3
-            ),
-            contentStack.bottomAnchor.constraint(
-                equalTo: scrollView.contentLayoutGuide.bottomAnchor,
-                constant: -4
-            ),
-            contentStack.widthAnchor.constraint(
-                equalTo: scrollView.frameLayoutGuide.widthAnchor,
-                constant: -6
-            )
-        ])
-
-        return scrollView
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.backgroundColor = .clear
+        collectionView.alwaysBounceVertical = true
+        collectionView.showsVerticalScrollIndicator = false
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.register(
+            PinyinCandidateCollectionCell.self,
+            forCellWithReuseIdentifier: Self.pinyinCandidateCellIdentifier
+        )
+        expandedPinyinCandidateCollectionView = collectionView
+        return collectionView
     }
 
-    private func makeExpandedCandidateButton(
-        title: String,
-        value: String,
-        isPrimary: Bool
-    ) -> UIButton {
-        var configuration = UIButton.Configuration.filled()
-        configuration.title = title
-        configuration.baseForegroundColor = .label
-        configuration.baseBackgroundColor = isPrimary ? .systemGray4 : .clear
-        configuration.cornerStyle = .medium
-        configuration.contentInsets = .zero
+    func collectionView(
+        _ collectionView: UICollectionView,
+        numberOfItemsInSection section: Int
+    ) -> Int {
+        max(6, pinyinCandidates.count + 1)
+    }
 
-        let button = UIButton(configuration: configuration)
-        button.titleLabel?.font = .systemFont(ofSize: 17, weight: .regular)
-        button.addAction(
-            UIAction { [weak self] _ in
-                self?.commitPinyinCandidate(value)
-            },
-            for: .touchUpInside
+    func collectionView(
+        _ collectionView: UICollectionView,
+        cellForItemAt indexPath: IndexPath
+    ) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(
+            withReuseIdentifier: Self.pinyinCandidateCellIdentifier,
+            for: indexPath
+        ) as! PinyinCandidateCollectionCell
+
+        if indexPath.item == 5 {
+            cell.configureAsCollapseButton()
+        } else if let candidateIndex = expandedCandidateIndex(for: indexPath.item) {
+            cell.configure(
+                title: pinyinCandidates[candidateIndex],
+                isPrimary: candidateIndex == 0
+            )
+        } else {
+            cell.configureAsPlaceholder()
+        }
+        return cell
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        didSelectItemAt indexPath: IndexPath
+    ) {
+        if hapticsEnabled {
+            keyFeedbackGenerator.prepare()
+            keyFeedbackGenerator.impactOccurred(intensity: 0.5)
+        }
+
+        if indexPath.item == 5 {
+            collapsePinyinCandidates()
+        } else if let candidateIndex = expandedCandidateIndex(for: indexPath.item) {
+            commitPinyinCandidate(pinyinCandidates[candidateIndex])
+        }
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        shouldSelectItemAt indexPath: IndexPath
+    ) -> Bool {
+        indexPath.item == 5 || expandedCandidateIndex(for: indexPath.item) != nil
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        willDisplay cell: UICollectionViewCell,
+        forItemAt indexPath: IndexPath
+    ) {
+        guard let candidateIndex = expandedCandidateIndex(for: indexPath.item),
+              candidateIndex >= pinyinCandidates.count - 6 else {
+            return
+        }
+        loadMorePinyinCandidatesIfNeeded()
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === expandedPinyinCandidateCollectionView,
+              scrollView.contentSize.height > 0 else {
+            return
+        }
+        let distanceToBottom = scrollView.contentSize.height
+            - scrollView.contentOffset.y
+            - scrollView.bounds.height
+        if distanceToBottom < 86 {
+            loadMorePinyinCandidatesIfNeeded()
+        }
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        layout collectionViewLayout: UICollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> CGSize {
+        let horizontalInsets: CGFloat = 6
+        let totalSpacing: CGFloat = 25
+        let width = floor(
+            (collectionView.bounds.width - horizontalInsets - totalSpacing) / 6
         )
-        addHapticFeedback(to: button)
-        button.accessibilityLabel = "输入候选词 \(title)"
-        return button
+        return CGSize(width: max(1, width), height: 43)
+    }
+
+    private func expandedCandidateIndex(for itemIndex: Int) -> Int? {
+        let candidateIndex = itemIndex < 5 ? itemIndex : itemIndex - 1
+        guard itemIndex != 5,
+              pinyinCandidates.indices.contains(candidateIndex) else {
+            return nil
+        }
+        return candidateIndex
+    }
+
+    private func loadMorePinyinCandidatesIfNeeded() {
+        guard isPinyinCandidatePanelExpanded,
+              hasMorePinyinCandidates,
+              !isLoadingMorePinyinCandidates,
+              let collectionView = expandedPinyinCandidateCollectionView else {
+            return
+        }
+
+        isLoadingMorePinyinCandidates = true
+        let page = PinyinInputEngine.nextCandidatePage(
+            for: pinyinComposition,
+            offset: nextPinyinCandidateOffset,
+            limit: Self.pinyinCandidatePageSize
+        )
+        var seen = Set(pinyinCandidates)
+        let newCandidates = page.candidates.filter { seen.insert($0).inserted }
+        pinyinCandidates.append(contentsOf: newCandidates)
+        hasMorePinyinCandidates = page.hasMore
+        nextPinyinCandidateOffset = page.nextOffset
+        isLoadingMorePinyinCandidates = false
+        collectionView.reloadData()
     }
 
     private func characterSpecs(
@@ -1386,11 +1455,23 @@ final class KeyboardViewController: UIInputViewController {
         guard !pinyinComposition.isEmpty else {
             return
         }
-        let selectedText = PinyinInputEngine.selectedText(
+        let selection = PinyinInputEngine.selection(
             for: candidate,
             composition: pinyinComposition
-        ) ?? candidate
-        replaceMarkedPinyinComposition(with: selectedText)
+        ) ?? .committed(candidate)
+        switch selection {
+        case let .committed(text):
+            replaceMarkedPinyinComposition(with: text)
+        case let .composing(markedText):
+            textDocumentProxy.setMarkedText(
+                markedText,
+                selectedRange: NSRange(
+                    location: markedText.utf16.count,
+                    length: 0
+                )
+            )
+            pinyinCandidates = []
+        }
         if isPinyinCandidatePanelExpanded {
             isPinyinCandidatePanelExpanded = false
             reloadTypingKeyboard()
@@ -1419,9 +1500,10 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func updateMarkedPinyinComposition() {
+        let markedText = PinyinInputEngine.markedText(for: pinyinComposition)
         textDocumentProxy.setMarkedText(
-            pinyinComposition,
-            selectedRange: NSRange(location: pinyinComposition.utf16.count, length: 0)
+            markedText,
+            selectedRange: NSRange(location: markedText.utf16.count, length: 0)
         )
     }
 
@@ -1508,17 +1590,25 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func toggleRecording() {
+        guard recordingCommandFallbackTask == nil,
+              hostCaptureTask == nil else {
+            return
+        }
+
         launchFailureMessage = nil
         launchFailureMessageUntil = 0
         let snapshot = SharedCommandStore.latestRecordingSnapshot()
         let now = Date().timeIntervalSince1970
         let snapshotAge = now - snapshot.updatedAt
         let isAppResponsive = snapshotAge >= -0.5 && snapshotAge < 1.5
+        let canUseBackgroundCommand = isAppResponsive
+            && (snapshot.isRecording || snapshot.isBackgroundStartReady)
         let diagnosticState = String(
-            format: "age=%.3f recording=%d transcribing=%d",
+            format: "age=%.3f recording=%d transcribing=%d background_ready=%d",
             snapshotAge,
             snapshot.isRecording ? 1 : 0,
-            snapshot.isTranscribing ? 1 : 0
+            snapshot.isTranscribing ? 1 : 0,
+            snapshot.isBackgroundStartReady ? 1 : 0
         )
         SharedCommandStore.recordKeyboardDiagnostic(
             "recording_button_tapped",
@@ -1532,12 +1622,14 @@ final class KeyboardViewController: UIInputViewController {
         lastHandledRecognitionResultID = SharedCommandStore.latestRecognitionResult()?.id
             ?? lastHandledRecognitionResultID
 
-        if isAppResponsive {
-            // A live host app publishes a heartbeat every 250 ms. This path must
-            // remain App-Group-only: even resolving the keyboard host touches
-            // PlugInKit/LaunchServices and can activate the containing app.
-            if let request = SharedCommandStore.requestRecordingToggle(
-                shouldReturnToPreviousInterface: false
+        if canUseBackgroundCommand {
+            // Prefer the invisible App-Group path while PiP keeps the containing
+            // app responsive. If the command is not acknowledged or completed,
+            // verification below falls back to the foreground with the same ID.
+            let command: SharedRecordingCommand = snapshot.isRecording ? .stop : .start
+            if let request = SharedCommandStore.requestRecordingCommand(
+                command,
+                requiresForegroundRoundTrip: false
             ) {
                 RecordingLaunchMetrics.mark(
                     "keyboard_live_request_persisted",
@@ -1550,6 +1642,7 @@ final class KeyboardViewController: UIInputViewController {
                 statusLabel.text = snapshot.isRecording
                     ? "正在停止录音..."
                     : "已发送录音请求"
+                scheduleRecordingCommandFallback(for: request)
             } else {
                 SharedCommandStore.recordKeyboardDiagnostic(
                     "responsive_app_group_request_failed",
@@ -1560,68 +1653,187 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
 
-        // Host discovery is prefetched while the keyboard is visible. On tap we
-        // only trigger one non-blocking refresh and launch immediately; returning
-        // to the host is a fallback concern and must not delay recording startup.
         SharedCommandStore.recordKeyboardDiagnostic(
-            "cold_app_host_capture_started",
+            "cold_app_manual_round_trip_started",
             detail: diagnosticState
         )
-        hostCaptureTask?.cancel()
-        hostCaptureTask = nil
-        refreshHostBundleIdentifierOnce()
+        statusLabel.text = "正在识别刚才的 App..."
+        hostCaptureTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
 
-        if let request = SharedCommandStore.requestRecordingToggle(
-            shouldReturnToPreviousInterface: true
-        ) {
-            RecordingLaunchMetrics.mark(
-                "keyboard_cold_request_persisted",
-                request: request,
-                detail: request.sourceHostBundleIdentifier ?? "host_unavailable"
+            let sourceHost = await self.captureHostForCurrentRecordingTap()
+            guard !Task.isCancelled else {
+                self.hostCaptureTask = nil
+                return
+            }
+
+            if let sourceHost {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_bundle_captured_for_request",
+                    detail: "bundle=\(sourceHost.bundleIdentifier) generation=\(sourceHost.generation) kind=\(sourceHost.kind.rawValue)"
+                )
+            } else {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_bundle_capture_timed_out",
+                    detail: "single_refresh"
+                )
+            }
+
+            self.persistColdRecordingRequest(
+                sourceHost: sourceHost,
+                fallbackRequestedAt: now
             )
-            appLaunchRequestedAt = request.requestedAt
-            statusLabel.text = "正在打开 AgenBoard 并启动录音..."
-            openContainingApp(
-                recordingURL(for: request),
-                reason: "cold_snapshot",
-                request: request
-            )
-        } else {
-            appLaunchRequestedAt = now
-            statusLabel.text = "共享通道不可用，正在打开 AgenBoard..."
-            openContainingApp(
-                URL(string: "agenboard://record?returnToPrevious=1"),
-                reason: "cold_shared_request_failed"
-            )
+            self.hostCaptureTask = nil
         }
     }
 
-    private func prefetchHostBundleIdentifier() {
-        hostCaptureTask?.cancel()
-        let startedAt = Date().timeIntervalSince1970
+    @MainActor
+    private func captureHostForCurrentRecordingTap() async -> SharedKeyboardHostCapture? {
+        if let presentationHostCapture {
+            SharedCommandStore.markKeyboardHostCaptureConsumed(
+                presentationHostCapture
+            )
+            return presentationHostCapture
+        }
 
-        guard #available(iOS 26.4, *) else {
-            refreshHostBundleIdentifierOnce()
+        guard let presentationStartedAt = hostPresentationStartedAt else {
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_capture_attempt_missing",
+                detail: "view_did_appear_not_prepared"
+            )
+            return nil
+        }
+
+        // If the user taps quickly, let the already-running presentation
+        // prefetch finish instead of starting a competing refresh sequence.
+        if let prefetchTask = hostPrefetchTask {
+            await prefetchTask.value
+            hostPrefetchTask = nil
+            if let presentationHostCapture {
+                SharedCommandStore.markKeyboardHostCaptureConsumed(
+                    presentationHostCapture
+                )
+                return presentationHostCapture
+            }
+        }
+
+        if let capture = consumeLatestHostCapture(
+            presentationStartedAt: presentationStartedAt
+        ) {
+            return capture
+        }
+
+        // The old working branch used a refresh burst while the keyboard was
+        // visible. Keep a shorter final burst for a tap that raced presentation.
+        if #available(iOS 26.4, *) {
+            for attempt in 1...6 {
+                let didRequestRefresh = refreshHostBundleIdentifierUsingArbiterOnce()
+                if let capture = consumeLatestHostCapture(
+                    presentationStartedAt: presentationStartedAt
+                ) {
+                    SharedCommandStore.recordKeyboardDiagnostic(
+                        "host_capture_tap_refresh_ready",
+                        detail: "attempt=\(attempt) bundle=\(capture.bundleIdentifier)"
+                    )
+                    return capture
+                }
+
+                guard didRequestRefresh else {
+                    break
+                }
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    return nil
+                }
+            }
+        }
+        return nil
+    }
+
+    private func prepareHostCaptureForCurrentPresentation() {
+        guard hostPresentationStartedAt == nil else {
             return
         }
 
-        hostCaptureTask = Task { @MainActor [weak self] in
-            for _ in 0..<10 {
-                guard let self, !Task.isCancelled else {
+        let presentationStartedAt = Date().timeIntervalSince1970
+        hostPresentationStartedAt = presentationStartedAt
+        presentationHostCapture = nil
+
+        // +load may receive the destination before viewDidAppear. Preserve and
+        // consume that fresh callback instead of deleting it here.
+        if let capture = SharedCommandStore.latestUnconsumedKeyboardHostCapture(
+            presentationStartedAt: presentationStartedAt
+        ) {
+            presentationHostCapture = capture
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_bundle_captured_before_view_did_appear",
+                detail: "bundle=\(capture.bundleIdentifier) generation=\(capture.generation)"
+            )
+            return
+        }
+
+        if #available(iOS 26.4, *) {
+            startHostCapturePrefetch(
+                presentationStartedAt: presentationStartedAt
+            )
+            return
+        }
+
+        guard let bundleIdentifier = LegacyKeyboardHostResolver.resolve(from: self) else {
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_bundle_capture_failed",
+                detail: "legacy resolver returned nil"
+            )
+            return
+        }
+        presentationHostCapture = SharedKeyboardHostCapture(
+            bundleIdentifier: bundleIdentifier,
+            capturedAt: Date().timeIntervalSince1970,
+            generation: UUID().uuidString,
+            kind: SharedCommandStore.hostKind(for: bundleIdentifier)
+        )
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "host_bundle_captured",
+            detail: bundleIdentifier
+        )
+    }
+
+    private func startHostCapturePrefetch(
+        presentationStartedAt: TimeInterval
+    ) {
+        hostPrefetchTask?.cancel()
+        hostPrefetchTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            // Preserve the exact retry budget of the previously working branch
+            // for this A/B test. It stops immediately when a callback arrives.
+            for attempt in 1...10 {
+                guard !Task.isCancelled,
+                      self.hostPresentationStartedAt == presentationStartedAt else {
                     return
                 }
 
-                self.refreshHostBundleIdentifierOnce()
-                let capturedAt =
-                    SharedCommandStore.latestKeyboardHostBundleIdentifierCapturedAt()
-                if capturedAt >= startedAt - 0.1 {
-                    RecordingLaunchMetrics.mark(
-                        "keyboard_host_prefetch_ready",
-                        requestedAt: startedAt
+                let didRequestRefresh = self.refreshHostBundleIdentifierUsingArbiterOnce()
+
+                if let capture = self.consumeLatestHostCapture(
+                    presentationStartedAt: presentationStartedAt
+                ) {
+                    SharedCommandStore.recordKeyboardDiagnostic(
+                        "host_capture_prefetch_ready",
+                        detail: "attempt=\(attempt) bundle=\(capture.bundleIdentifier)"
                     )
+                    self.hostPrefetchTask = nil
                     return
                 }
 
+                guard didRequestRefresh else {
+                    break
+                }
                 do {
                     try await Task.sleep(nanoseconds: 75_000_000)
                 } catch {
@@ -1629,43 +1841,64 @@ final class KeyboardViewController: UIInputViewController {
                 }
             }
 
-            RecordingLaunchMetrics.mark(
-                "keyboard_host_prefetch_timed_out",
-                requestedAt: startedAt
-            )
+            if let capture = self.consumeLatestHostCapture(
+                presentationStartedAt: presentationStartedAt
+            ) {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_capture_prefetch_ready",
+                    detail: "attempt=final bundle=\(capture.bundleIdentifier)"
+                )
+            } else {
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "host_capture_prefetch_timed_out",
+                    detail: "attempts=10"
+                )
+            }
+            self.hostPrefetchTask = nil
         }
     }
 
-    private func refreshHostBundleIdentifierOnce() {
-        if #available(iOS 26.4, *) {
-            refreshHostBundleIdentifierUsingArbiterOnce()
-            return
-        }
-
-        if let bundleIdentifier = LegacyKeyboardHostResolver.resolve(from: self) {
-            SharedCommandStore.storeKeyboardHostBundleIdentifier(bundleIdentifier)
-            SharedCommandStore.recordKeyboardDiagnostic(
-                "host_bundle_captured",
-                detail: bundleIdentifier
-            )
-        } else {
-            SharedCommandStore.storeKeyboardHostCaptureFailure(
-                "legacy resolver returned nil"
-            )
-            SharedCommandStore.recordKeyboardDiagnostic(
-                "host_bundle_capture_failed",
-                detail: "legacy resolver returned nil"
+    private func finishHostCaptureForCurrentPresentation() {
+        if let presentationHostCapture {
+            SharedCommandStore.markKeyboardHostCaptureConsumed(
+                presentationHostCapture
             )
         }
+        if let hostPresentationStartedAt,
+           let lateCapture = SharedCommandStore.latestUnconsumedKeyboardHostCapture(
+               presentationStartedAt: hostPresentationStartedAt
+           ) {
+            // Even when no recording was requested, do not leak a callback from
+            // this presentation into the next host application.
+            SharedCommandStore.markKeyboardHostCaptureConsumed(lateCapture)
+        }
+        hostPresentationStartedAt = nil
+        presentationHostCapture = nil
     }
 
-    private func refreshHostBundleIdentifierUsingArbiterOnce() {
-        let selector = NSSelectorFromString(
-            "refreshHostBundleIdentifier"
-        )
+    private func consumeLatestHostCapture(
+        presentationStartedAt: TimeInterval
+    ) -> SharedKeyboardHostCapture? {
+        guard let capture = SharedCommandStore.latestUnconsumedKeyboardHostCapture(
+            presentationStartedAt: presentationStartedAt
+        ) else {
+            return nil
+        }
+
+        presentationHostCapture = capture
+        SharedCommandStore.markKeyboardHostCaptureConsumed(capture)
+        return capture
+    }
+
+    private func refreshHostBundleIdentifierUsingArbiterOnce() -> Bool {
+        let selector = NSSelectorFromString("refreshHostBundleIdentifierOnce")
         guard let trackerClass = NSClassFromString("KeyboardHostTracker"),
               let method = class_getClassMethod(trackerClass, selector) else {
-            return
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "host_tracker_refresh_unavailable",
+                detail: "class_or_selector_missing"
+            )
+            return false
         }
 
         typealias RefreshImplementation = @convention(c) (
@@ -1677,6 +1910,38 @@ final class KeyboardViewController: UIInputViewController {
             to: RefreshImplementation.self
         )
         refresh(trackerClass, selector)
+        return true
+    }
+
+    private func persistColdRecordingRequest(
+        sourceHost: SharedKeyboardHostCapture?,
+        fallbackRequestedAt: TimeInterval
+    ) {
+        if let request = SharedCommandStore.requestRecordingCommand(
+            .start,
+            requiresForegroundRoundTrip: true,
+            sourceHost: sourceHost
+        ) {
+            RecordingLaunchMetrics.mark(
+                "keyboard_cold_request_persisted",
+                request: request,
+                detail: sourceHost?.bundleIdentifier ?? "host_unavailable"
+            )
+            appLaunchRequestedAt = request.requestedAt
+            statusLabel.text = "正在打开 AgenBoard 并启动录音..."
+            openContainingApp(
+                recordingURL(for: request),
+                reason: "cold_snapshot",
+                request: request
+            )
+        } else {
+            appLaunchRequestedAt = fallbackRequestedAt
+            statusLabel.text = "共享通道不可用，正在打开 AgenBoard..."
+            openContainingApp(
+                URL(string: "agenboard://record?manualReturn=1&command=start"),
+                reason: "cold_shared_request_failed"
+            )
+        }
     }
 
     private func startSnapshotTimer() {
@@ -1709,6 +1974,8 @@ final class KeyboardViewController: UIInputViewController {
         let shouldKeepInsertionMessage = now < insertionMessageUntil
         let shouldShowLaunchFailure = now < launchFailureMessageUntil
         let isLaunchingApp = appLaunchRequestedAt.map { now - $0 < 8 } ?? false
+        let isAwaitingRecordingCommand = recordingCommandFallbackTask != nil
+            || hostCaptureTask != nil
         let snapshotError = isFresh ? voiceErrorMessage(from: snapshot.status) : nil
 
         if isFresh {
@@ -1718,7 +1985,8 @@ final class KeyboardViewController: UIInputViewController {
         updateRecordingButton(
             isRecording: isActive,
             isTranscribing: isTranscribing,
-            isLaunchingApp: isLaunchingApp && !isFresh,
+            isLaunchingApp: (isLaunchingApp && !isFresh)
+                || isAwaitingRecordingCommand,
             audioLevel: isActive ? snapshot.audioLevel : 0
         )
 
@@ -1733,7 +2001,7 @@ final class KeyboardViewController: UIInputViewController {
         } else if isTranscribing {
             statusLabel.textColor = .secondaryLabel
             statusLabel.text = nil
-        } else if isLaunchingApp {
+        } else if isLaunchingApp || isAwaitingRecordingCommand {
             statusLabel.text = nil
             statusLabel.textColor = .secondaryLabel
         } else if let snapshotError {
@@ -1841,8 +2109,25 @@ final class KeyboardViewController: UIInputViewController {
         components.queryItems = [
             URLQueryItem(name: "requestID", value: request.id),
             URLQueryItem(name: "requestedAt", value: String(request.requestedAt)),
-            URLQueryItem(name: "returnToPrevious", value: "1")
+            URLQueryItem(name: "command", value: request.command.rawValue),
+            URLQueryItem(name: "manualReturn", value: "1")
         ]
+        if let sourceHost = request.sourceHost {
+            components.queryItems?.append(contentsOf: [
+                URLQueryItem(
+                    name: "sourceHostBundleIdentifier",
+                    value: sourceHost.bundleIdentifier
+                ),
+                URLQueryItem(
+                    name: "sourceHostCapturedAt",
+                    value: String(sourceHost.capturedAt)
+                ),
+                URLQueryItem(
+                    name: "sourceHostGeneration",
+                    value: sourceHost.generation
+                )
+            ])
+        }
         return components.url
     }
 
@@ -2000,6 +2285,111 @@ final class KeyboardViewController: UIInputViewController {
         }
     }
 
+    private func scheduleRecordingCommandFallback(
+        for request: SharedRecordingToggleRequest
+    ) {
+        recordingCommandFallbackTask?.cancel()
+        recordingCommandFallbackTask = Task { @MainActor [weak self] in
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            var wasAccepted = false
+            var fallbackReason = "no_acknowledgement"
+
+            while !Task.isCancelled {
+                guard let self else {
+                    return
+                }
+
+                guard SharedCommandStore.latestRecordingToggleRequest()?.id
+                        == request.id else {
+                    self.recordingCommandFallbackTask = nil
+                    return
+                }
+
+                if let response = SharedCommandStore.latestRecordingRequestResponse(),
+                   response.requestID == request.id,
+                   response.command == request.command {
+                    switch response.phase {
+                    case .accepted:
+                        wasAccepted = true
+                    case .recording where request.command == .start,
+                         .stopped where request.command == .stop:
+                        RecordingLaunchMetrics.mark(
+                            "keyboard_recording_command_succeeded",
+                            request: request,
+                            detail: response.phase.rawValue
+                        )
+                        self.recordingCommandFallbackTask = nil
+                        return
+                    case .failed:
+                        fallbackReason = response.message.isEmpty
+                            ? "command_failed"
+                            : response.message
+                        self.recordingCommandFallbackTask = nil
+                        self.foregroundContainingApp(
+                            for: request,
+                            reason: fallbackReason
+                        )
+                        return
+                    default:
+                        break
+                    }
+                }
+
+                let snapshot = SharedCommandStore.latestRecordingSnapshot()
+                let isFresh = Date().timeIntervalSince1970 - snapshot.updatedAt < 1.5
+                let reachedRequestedState = isFresh && (
+                    (request.command == .start && snapshot.isRecording)
+                        || (request.command == .stop && !snapshot.isRecording)
+                )
+                if reachedRequestedState {
+                    self.recordingCommandFallbackTask = nil
+                    return
+                }
+
+                let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+                let deadline = wasAccepted ? 1.0 : 0.32
+                if elapsed >= deadline {
+                    fallbackReason = wasAccepted
+                        ? "accepted_without_completion"
+                        : "no_acknowledgement"
+                    break
+                }
+
+                do {
+                    try await Task.sleep(nanoseconds: 40_000_000)
+                } catch {
+                    return
+                }
+            }
+
+            guard let self else {
+                return
+            }
+            self.recordingCommandFallbackTask = nil
+            self.foregroundContainingApp(for: request, reason: fallbackReason)
+        }
+    }
+
+    private func foregroundContainingApp(
+        for request: SharedRecordingToggleRequest,
+        reason: String
+    ) {
+        RecordingLaunchMetrics.mark(
+            "keyboard_recording_command_fallback",
+            request: request,
+            detail: reason
+        )
+        appLaunchRequestedAt = Date().timeIntervalSince1970
+        statusLabel.text = request.command == .start
+            ? "后台录音不可用，正在打开 AgenBoard..."
+            : "停止请求未响应，正在打开 AgenBoard..."
+        openContainingApp(
+            recordingURL(for: request),
+            reason: "recording_command_\(reason)",
+            request: request
+        )
+    }
+
     private func showLaunchFailure(_ message: String) {
         appOpenVerificationTask?.cancel()
         appOpenVerificationTask = nil
@@ -2066,8 +2456,14 @@ final class KeyboardViewController: UIInputViewController {
 
         cursorTrackingDefaultConfiguration = button.configuration
         var configuration = button.configuration
-        configuration?.title = "拖动以移动光标"
-        configuration?.image = UIImage(systemName: "arrow.left.and.right")
+        configuration?.title = nil
+        configuration?.image = UIImage(
+            systemName: "arrow.up.and.down.and.arrow.left.and.right"
+        )
+        configuration?.preferredSymbolConfigurationForImage = .init(
+            pointSize: 20,
+            weight: .medium
+        )
         configuration?.baseBackgroundColor = .systemGray4
         button.configuration = configuration
 
@@ -2286,6 +2682,94 @@ final class KeyboardViewController: UIInputViewController {
 
 private final class PinyinCandidateButton: UIButton {
     var candidateValue = ""
+}
+
+private final class PinyinCandidateCollectionCell: UICollectionViewCell {
+    private let titleLabel = UILabel()
+    private let imageView = UIImageView()
+    private var baseBackgroundColor: UIColor = .clear
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureLayout()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureLayout()
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            contentView.backgroundColor = isHighlighted
+                ? .systemGray3
+                : baseBackgroundColor
+        }
+    }
+
+    func configure(title: String, isPrimary: Bool) {
+        titleLabel.text = title
+        titleLabel.isHidden = false
+        imageView.isHidden = true
+        baseBackgroundColor = isPrimary ? .systemGray4 : .clear
+        contentView.backgroundColor = baseBackgroundColor
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = "输入候选词 \(title)"
+    }
+
+    func configureAsCollapseButton() {
+        titleLabel.isHidden = true
+        imageView.isHidden = false
+        imageView.image = UIImage(systemName: "chevron.up")
+        baseBackgroundColor = .clear
+        contentView.backgroundColor = baseBackgroundColor
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = "收起候选词"
+    }
+
+    func configureAsPlaceholder() {
+        titleLabel.isHidden = true
+        imageView.isHidden = true
+        baseBackgroundColor = .clear
+        contentView.backgroundColor = baseBackgroundColor
+        isAccessibilityElement = false
+        accessibilityLabel = nil
+    }
+
+    private func configureLayout() {
+        contentView.layer.cornerRadius = 8
+        contentView.layer.cornerCurve = .continuous
+
+        titleLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        titleLabel.textColor = .label
+        titleLabel.textAlignment = .center
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.72
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(titleLabel)
+
+        imageView.tintColor = .secondaryLabel
+        imageView.preferredSymbolConfiguration = .init(
+            pointSize: 14,
+            weight: .semibold
+        )
+        imageView.contentMode = .center
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 2),
+            titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2),
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor),
+            titleLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            imageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+    }
 }
 
 private final class KeyboardTypingSurfaceView: UIView {
