@@ -116,9 +116,12 @@ enum SpeechRecognitionProvider: String, Codable, CaseIterable, Identifiable, Sen
     var privacySummary: String {
         switch self {
         case .apple:
-            return "AgenBoard 不会把录音发送到项目维护者的服务器。"
+            if #available(iOS 26.0, *) {
+                return "录音由设备端 SpeechAnalyzer 处理，不会发送给项目维护者。"
+            }
+            return "录音由 Apple Speech 兼容路径处理，可能连接 Apple 服务，但不会发送给项目维护者。"
         case .aliyun:
-            return "API Key 仅保存在本机钥匙串；AgenBoard 当前不设中转服务器，主 App 直接调用阿里云百炼。"
+            return "主 App 使用你的 API Key 直连阿里云百炼；录音和热词不会经过或发送给项目维护者。"
         }
     }
 }

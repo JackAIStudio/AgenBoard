@@ -2,6 +2,13 @@ import SwiftUI
 import UIKit
 
 struct SpeechServiceSettingsView: View {
+    private static let aliyunAPIKeyManagementURL = URL(
+        string: "https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key"
+    )!
+    private static let privacyURL = URL(
+        string: "https://github.com/JackAIStudio/AgenBoard/blob/main/PRIVACY.md"
+    )!
+
     @AppStorage(
         SpeechServicePreferences.providerKey,
         store: SpeechServicePreferences.defaults
@@ -27,6 +34,23 @@ struct SpeechServiceSettingsView: View {
                 Text("选择识别服务")
             } footer: {
                 Text("选择会立即生效。你可以随时回来切换，不会影响已经保存的识别历史。")
+            }
+
+            Section("项目的数据边界") {
+                Label("项目维护者不会收到你的录音", systemImage: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+
+                Text("AgenBoard 不运营后端服务器、账号系统、录音中转或云存储。正常使用时，项目维护者不会收到、保存或查看你的录音、转写文本、热词或 API Key。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("每次录音及其识别历史默认保存在当前设备；在 App 中删除对应历史时，本地录音也会被删除。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Link(destination: Self.privacyURL) {
+                    Label("查看完整隐私说明", systemImage: "arrow.up.right.square")
+                }
             }
 
             if provider == .apple {
@@ -55,9 +79,9 @@ struct SpeechServiceSettingsView: View {
                     HStack {
                         Group {
                             if isAPIKeyVisible {
-                                TextField("API Key（sk-…）", text: $apiKeyDraft)
+                                TextField("粘贴百炼 API Key", text: $apiKeyDraft)
                             } else {
-                                SecureField("API Key（sk-…）", text: $apiKeyDraft)
+                                SecureField("粘贴百炼 API Key", text: $apiKeyDraft)
                             }
                         }
                         .textInputAutocapitalization(.never)
@@ -82,6 +106,13 @@ struct SpeechServiceSettingsView: View {
                             .foregroundStyle(.orange)
                     }
 
+                    Link(destination: Self.aliyunAPIKeyManagementURL) {
+                        Label(
+                            hasStoredAPIKey ? "管理百炼 API Key" : "前往百炼创建 API Key",
+                            systemImage: "arrow.up.right.square"
+                        )
+                    }
+
                     if hasStoredAPIKey {
                         Button {
                             UIPasteboard.general.string = apiKeyDraft
@@ -96,7 +127,11 @@ struct SpeechServiceSettingsView: View {
                     Label("服务地域：华北 2（北京）", systemImage: "mappin.and.ellipse")
                         .font(.callout)
 
-                    Text("当前个人版固定使用北京 DashScope 接入点，无需填写 Workspace ID。请使用在华北 2（北京）创建的百炼 API Key。")
+                    Text("当前版本固定使用华北 2（北京）的 DashScope 接入点，无需填写 Workspace ID。其他地域创建的 API Key 无法在当前版本中使用。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text("新创建的 API Key 明文只在阿里云控制台显示一次，请创建后立即复制并妥善保存。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -126,18 +161,18 @@ struct SpeechServiceSettingsView: View {
                     Text("阿里云百炼")
                 } footer: {
                     Text(
-                        "阿里云模式会把录音上传到百炼临时存储，再调用 fun-asr 整段识别；启用热词时同步当前最多 100 个激活词，权重固定为 5。API Key 默认隐藏，可按需显示或复制，并且不会写入项目文件或 UserDefaults。"
+                        "阿里云模式会把录音直传百炼托管的私有临时存储，再调用 fun-asr 整段识别；临时录音在 48 小时后由阿里云自动清理，无需另行开通 OSS。启用热词时会同步当前最多 100 个激活词。API Key 默认只保存在本机钥匙串，仅在你主动选择导出时才会进入数据包。"
                     )
                 }
             }
 
-            Section("数据与费用") {
+            Section("当前识别服务的数据去向") {
                 Text(provider.privacySummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 if provider == .aliyun {
-                    Text("录音、已启用热词和识别请求受你与阿里云之间的服务条款约束；产生的调用费用计入你自己的百炼账号。删除本机 API Key 后，AgenBoard 将无法继续调用该服务。")
+                    Text("录音、已启用热词和识别请求只会直接发送到阿里云，并受你与阿里云之间的服务条款约束；产生的调用费用计入你自己的百炼账号。删除本机 API Key 后，AgenBoard 将无法继续调用该服务。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -203,7 +238,10 @@ struct SpeechServiceSettingsView: View {
                 showsError = false
                 statusMessage = "连接成功，fun-asr 与热词服务可用"
             } catch {
-                statusMessage = error.localizedDescription
+                statusMessage = """
+                \(error.localizedDescription)
+                如果凭证无效，请确认 API Key 创建于华北 2（北京）地域。
+                """
                 showsError = true
             }
         }

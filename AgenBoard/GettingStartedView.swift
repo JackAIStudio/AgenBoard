@@ -236,7 +236,7 @@ struct GettingStartedView: View {
             Label("还需配置你的百炼 API Key", systemImage: "key.fill")
                 .font(.headline)
 
-            Text("API Key 来自你自己的阿里云百炼账号，调用费用也由该账号承担。AgenBoard 只把 Key 保存在本机钥匙串，不会写入源代码、项目配置或 UserDefaults。")
+            Text("API Key 来自你自己的阿里云百炼账号，调用费用也由该账号承担。日常配置只保存在本机钥匙串；仅在你主动选择导出时才会进入数据包，不会写入源代码、项目配置或 UserDefaults。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -255,11 +255,15 @@ struct GettingStartedView: View {
 
     private var openSourcePromise: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("开源，也要把数据流向讲清楚", systemImage: "curlybraces.square")
+            Label("项目不托管或查看你的录音", systemImage: "checkmark.shield.fill")
                 .font(.headline)
 
-            Text("Apple 模式由系统语音能力处理；阿里云模式由主 App 使用你的 API Key 直连百炼。识别历史、热词、快捷短语和设置默认保存在本机或 App Group 中。所有实现都可以在项目源代码中审查。")
+            Text("AgenBoard 不运营后端、账号系统或云存储。正常使用时，项目维护者不会收到、保存或查看你的录音、转写文本、热词或 API Key。Apple 模式交由系统语音能力处理；阿里云模式由主 App 使用你的 API Key 直连百炼。")
                 .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Text("识别历史默认保存在当前设备。开源使这些网络路径和存储设计可以被审查。")
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(16)
