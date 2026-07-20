@@ -498,9 +498,15 @@ final class KeyboardViewController: UIInputViewController,
                 constant: -10
             ),
 
-            deleteButton.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -4),
-            deleteButton.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 36),
-            atButton.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -4),
+            deleteButton.leadingAnchor.constraint(
+                equalTo: textInputButtonRow.trailingAnchor,
+                constant: 9
+            ),
+            deleteButton.centerYAnchor.constraint(
+                equalTo: recordingButton.centerYAnchor,
+                constant: 7
+            ),
+            atButton.centerXAnchor.constraint(equalTo: deleteButton.centerXAnchor),
             atButton.topAnchor.constraint(equalTo: deleteButton.bottomAnchor, constant: 8)
         ])
 
