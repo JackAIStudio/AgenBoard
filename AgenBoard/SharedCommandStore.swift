@@ -293,10 +293,10 @@ enum SharedCommandStore {
 
     static func keyboardQuickPhraseModuleVisible() -> Bool {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
-            return false
+            return true
         }
         guard defaults.object(forKey: keyboardQuickPhraseModuleVisibleKey) != nil else {
-            return false
+            return true
         }
         return defaults.bool(forKey: keyboardQuickPhraseModuleVisibleKey)
     }
