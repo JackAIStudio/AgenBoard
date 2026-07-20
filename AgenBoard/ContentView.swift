@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var retriedFailedRecordingRequestIDs: Set<String> = []
     @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
+    @State private var queuedRecordingStartRequest: SharedRecordingToggleRequest?
     @State private var keepsPictureInPictureAlive = false
     @State private var showsManualReturnGuidance = false
     @State private var manualReturnNeedsSystemFallback = false
@@ -50,11 +51,7 @@ struct ContentView: View {
     }
 
     private var canReturnToPreviousInterface: Bool {
-        recorder.isRecording
-            && hasCallableReturnTarget
-            && pendingReturnAttemptID == nil
-            && (pip.isPictureInPictureActive
-                || pip.isPreparedForBackgroundTransition)
+        hasCallableReturnTarget && pendingReturnAttemptID == nil
     }
 
     private var returnHostBundleIdentifier: String? {
@@ -577,25 +574,45 @@ struct ContentView: View {
         }
         .onAppear {
             keepsPictureInPictureAlive = true
+            SharedCommandStore.setBackgroundRecordingStartReady(
+                pip.isPictureInPictureActive
+            )
             configurePictureInPictureActions()
             pip.prepareForAutomaticStart()
         }
         .onChange(of: recorder.isRecording) { _, isRecording in
             pip.setRecordingState(isRecording)
             if isRecording {
+                queuedRecordingStartRequest = nil
                 RecordingLaunchMetrics.mark(
                     "main_recording_state_ready",
                     request: activeLaunchRequest
                 )
             } else {
-                showsManualReturnGuidance = false
-                manualReturnNeedsSystemFallback = false
-                systemReturnActionIsReady = false
                 pendingReturnAttemptID = nil
+                if activeLaunchRequest?.requiresForegroundRoundTrip != true {
+                    showsManualReturnGuidance = false
+                    manualReturnNeedsSystemFallback = false
+                    systemReturnActionIsReady = false
+                }
+            }
+        }
+        .onChange(of: recorder.isTranscribing) { _, isTranscribing in
+            if !isTranscribing {
+                startQueuedRecordingIfReady()
             }
         }
         .onChange(of: recorder.audioLevel) { _, level in
             pip.setAudioLevel(level)
+        }
+        .onChange(of: pip.isPictureInPictureActive) { _, isActive in
+            SharedCommandStore.setBackgroundRecordingStartReady(isActive)
+            RecordingLaunchMetrics.mark(
+                isActive
+                    ? "main_background_recording_ready"
+                    : "main_background_recording_unavailable",
+                request: activeLaunchRequest
+            )
         }
         .onChange(of: pip.isPreparedForBackgroundTransition) { _, _ in
             if pip.isPreparedForBackgroundTransition {
@@ -614,6 +631,7 @@ struct ContentView: View {
                     failPendingReturnAttempt(detail: "scene_became_active_before_background")
                 }
                 handleLatestSharedRecordingRequest()
+                startQueuedRecordingIfReady()
                 return
             }
 
@@ -720,6 +738,7 @@ struct ContentView: View {
                 request: activeLaunchRequest
             )
             keepsPictureInPictureAlive = false
+            SharedCommandStore.setBackgroundRecordingStartReady(false)
             recorder.stopRecordingAndTranscribeIfNeeded()
         }
 
@@ -733,6 +752,7 @@ struct ContentView: View {
             activeLaunchRequest = nil
             showsQuickPhraseLibrary = false
             keepsPictureInPictureAlive = true
+            SharedCommandStore.setBackgroundRecordingStartReady(false)
         }
     }
 
@@ -957,21 +977,53 @@ struct ContentView: View {
                     phase: .recording
                 )
             } else if recorder.isTranscribing {
+                queuedRecordingStartRequest = request
                 SharedCommandStore.updateRecordingRequestResponse(
                     for: request,
-                    phase: .failed,
-                    message: "正在处理上一段语音"
+                    phase: .accepted,
+                    message: "上一段语音识别完成后将自动开始录音"
+                )
+                RecordingLaunchMetrics.mark(
+                    "main_recording_start_queued_after_transcription",
+                    request: request
                 )
             } else {
                 recorder.startRecordingIfNeeded(request: request)
             }
         case .stop:
+            queuedRecordingStartRequest = nil
             recorder.stopRecordingAndTranscribeIfNeeded()
             SharedCommandStore.updateRecordingRequestResponse(
                 for: request,
                 phase: .stopped
             )
         }
+    }
+
+    private func startQueuedRecordingIfReady() {
+        guard scenePhase == .active,
+              !recorder.isRecording,
+              !recorder.isTranscribing,
+              let request = queuedRecordingStartRequest else {
+            return
+        }
+
+        queuedRecordingStartRequest = nil
+        keepsPictureInPictureAlive = true
+        if request.requiresForegroundRoundTrip {
+            showsManualReturnGuidance = true
+            pip.prepareForAutomaticStart()
+        }
+        SharedCommandStore.updateRecordingRequestResponse(
+            for: request,
+            phase: .accepted,
+            message: "上一段识别完成，正在开始录音"
+        )
+        RecordingLaunchMetrics.mark(
+            "main_recording_start_resumed_after_transcription",
+            request: request
+        )
+        recorder.startRecordingIfNeeded(request: request)
     }
 
     private func returnToPreviousInterface() {

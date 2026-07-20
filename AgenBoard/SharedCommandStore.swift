@@ -4,6 +4,7 @@ import os
 struct SharedRecordingSnapshot {
     let isRecording: Bool
     let isTranscribing: Bool
+    let isBackgroundStartReady: Bool
     let audioLevel: Double
     let decibels: Double
     let duration: Double
@@ -166,6 +167,8 @@ enum SharedCommandStore {
     private static let recordingResponseUpdatedAtKey = "recordingResponseUpdatedAt"
     private static let recordingIsActiveKey = "recordingIsActive"
     private static let recordingIsTranscribingKey = "recordingIsTranscribing"
+    private static let recordingBackgroundStartReadyKey =
+        "recordingBackgroundStartReady"
     private static let recordingAudioLevelKey = "recordingAudioLevel"
     private static let recordingDecibelsKey = "recordingDecibels"
     private static let recordingDurationKey = "recordingDuration"
@@ -463,7 +466,6 @@ enum SharedCommandStore {
             generation: defaults.string(forKey: recordingHostGenerationKey)
         )
         if sourceHost == nil,
-           requiresForegroundRoundTrip,
            let lateCapture = keyboardHostCaptureAssociatedWithRequest(
                from: defaults,
                requestedAt: requestedAt
@@ -698,11 +700,21 @@ enum SharedCommandStore {
         defaults.synchronize()
     }
 
+    static func setBackgroundRecordingStartReady(_ isReady: Bool) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(isReady, forKey: recordingBackgroundStartReadyKey)
+        defaults.synchronize()
+    }
+
     static func latestRecordingSnapshot() -> SharedRecordingSnapshot {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return SharedRecordingSnapshot(
                 isRecording: false,
                 isTranscribing: false,
+                isBackgroundStartReady: false,
                 audioLevel: 0,
                 decibels: -80,
                 duration: 0,
@@ -714,6 +726,9 @@ enum SharedCommandStore {
         return SharedRecordingSnapshot(
             isRecording: defaults.bool(forKey: recordingIsActiveKey),
             isTranscribing: defaults.bool(forKey: recordingIsTranscribingKey),
+            isBackgroundStartReady: defaults.bool(
+                forKey: recordingBackgroundStartReadyKey
+            ),
             audioLevel: defaults.double(forKey: recordingAudioLevelKey),
             decibels: defaults.object(forKey: recordingDecibelsKey) as? Double ?? -80,
             duration: defaults.double(forKey: recordingDurationKey),

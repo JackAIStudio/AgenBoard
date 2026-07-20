@@ -35,6 +35,10 @@ final class SpeechRecorder: ObservableObject {
     private var currentConfiguredHotwordCount = 0
     private var legacyTranscriptionStartedAt: Date?
     private var smoothedAudioLevel = 0.0
+    private let retryableAudioSessionActivationErrorCodes: Set<Int> = [
+        560_557_684, // AVAudioSessionErrorCodeCannotInterruptOthers ('!int')
+        561_015_905  // AVAudioSessionErrorCodeCannotStartPlaying ('!pla')
+    ]
 
     init(historyStore: RecognitionHistoryStore) {
         self.historyStore = historyStore
@@ -218,7 +222,10 @@ final class SpeechRecorder: ObservableObject {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .mixWithOthers])
-            try session.setActive(true)
+            try await activateAudioSessionWithRetry(
+                session,
+                request: request
+            )
             RecordingLaunchMetrics.mark(
                 "main_audio_session_active",
                 request: request
@@ -275,6 +282,32 @@ final class SpeechRecorder: ObservableObject {
             let message = "无法开始录音：\(error.localizedDescription)"
             publishRequestResponse(for: request, phase: .failed, message: message)
             showError(message)
+        }
+    }
+
+    private func activateAudioSessionWithRetry(
+        _ session: AVAudioSession,
+        request: SharedRecordingToggleRequest?
+    ) async throws {
+        for attempt in 1...5 {
+            do {
+                try session.setActive(true)
+                return
+            } catch {
+                let nsError = error as NSError
+                guard retryableAudioSessionActivationErrorCodes.contains(
+                    nsError.code
+                ), attempt < 5 else {
+                    throw error
+                }
+
+                RecordingLaunchMetrics.mark(
+                    "main_audio_session_activation_retry",
+                    request: request,
+                    detail: "attempt=\(attempt) code=\(nsError.code)"
+                )
+                try await Task.sleep(nanoseconds: 150_000_000)
+            }
         }
     }
 

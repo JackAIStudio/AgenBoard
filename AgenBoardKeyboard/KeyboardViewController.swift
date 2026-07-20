@@ -1446,11 +1446,23 @@ final class KeyboardViewController: UIInputViewController,
         guard !pinyinComposition.isEmpty else {
             return
         }
-        let selectedText = PinyinInputEngine.selectedText(
+        let selection = PinyinInputEngine.selection(
             for: candidate,
             composition: pinyinComposition
-        ) ?? candidate
-        replaceMarkedPinyinComposition(with: selectedText)
+        ) ?? .committed(candidate)
+        switch selection {
+        case let .committed(text):
+            replaceMarkedPinyinComposition(with: text)
+        case let .composing(markedText):
+            textDocumentProxy.setMarkedText(
+                markedText,
+                selectedRange: NSRange(
+                    location: markedText.utf16.count,
+                    length: 0
+                )
+            )
+            pinyinCandidates = []
+        }
         if isPinyinCandidatePanelExpanded {
             isPinyinCandidatePanelExpanded = false
             reloadTypingKeyboard()
@@ -1479,9 +1491,10 @@ final class KeyboardViewController: UIInputViewController,
     }
 
     private func updateMarkedPinyinComposition() {
+        let markedText = PinyinInputEngine.markedText(for: pinyinComposition)
         textDocumentProxy.setMarkedText(
-            pinyinComposition,
-            selectedRange: NSRange(location: pinyinComposition.utf16.count, length: 0)
+            markedText,
+            selectedRange: NSRange(location: markedText.utf16.count, length: 0)
         )
     }
 
@@ -1579,11 +1592,14 @@ final class KeyboardViewController: UIInputViewController,
         let now = Date().timeIntervalSince1970
         let snapshotAge = now - snapshot.updatedAt
         let isAppResponsive = snapshotAge >= -0.5 && snapshotAge < 1.5
+        let canUseBackgroundCommand = isAppResponsive
+            && (snapshot.isRecording || snapshot.isBackgroundStartReady)
         let diagnosticState = String(
-            format: "age=%.3f recording=%d transcribing=%d",
+            format: "age=%.3f recording=%d transcribing=%d background_ready=%d",
             snapshotAge,
             snapshot.isRecording ? 1 : 0,
-            snapshot.isTranscribing ? 1 : 0
+            snapshot.isTranscribing ? 1 : 0,
+            snapshot.isBackgroundStartReady ? 1 : 0
         )
         SharedCommandStore.recordKeyboardDiagnostic(
             "recording_button_tapped",
@@ -1597,16 +1613,7 @@ final class KeyboardViewController: UIInputViewController,
         lastHandledRecognitionResultID = SharedCommandStore.latestRecognitionResult()?.id
             ?? lastHandledRecognitionResultID
 
-        if isAppResponsive && snapshot.isTranscribing {
-            SharedCommandStore.recordKeyboardDiagnostic(
-                "responsive_transcription_request_ignored",
-                detail: diagnosticState
-            )
-            statusLabel.text = "正在处理上一段语音..."
-            return
-        }
-
-        if isAppResponsive {
+        if canUseBackgroundCommand {
             // Prefer the invisible App-Group path while PiP keeps the containing
             // app responsive. If the command is not acknowledged or completed,
             // verification below falls back to the foreground with the same ID.
