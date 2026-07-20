@@ -6,6 +6,11 @@ struct PinyinCandidatePage {
     let nextOffset: Int
 }
 
+enum PinyinCandidateSelection: Equatable {
+    case committed(String)
+    case composing(markedText: String)
+}
+
 struct PinyinInputEngine {
     static func prepare() {
         if RimePinyinEngine.shared.prepare() {
@@ -68,14 +73,37 @@ struct PinyinInputEngine {
         )
     }
 
+    static func selection(
+        for candidate: String,
+        composition: String
+    ) -> PinyinCandidateSelection? {
+        RimePinyinEngine.shared.selectCandidate(
+            candidate,
+            for: composition,
+            commitRemainingComposition: false
+        )
+    }
+
     static func selectedText(
         for candidate: String,
         composition: String
     ) -> String? {
-        RimePinyinEngine.shared.selectCandidate(
+        guard case let .committed(text) = RimePinyinEngine.shared.selectCandidate(
             candidate,
-            for: composition
-        )
+            for: composition,
+            commitRemainingComposition: true
+        ) else {
+            return nil
+        }
+        return text
+    }
+
+    static func markedText(for composition: String) -> String {
+        if !composition.isEmpty {
+            _ = RimePinyinEngine.shared.prepare()
+        }
+        return RimePinyinEngine.shared.markedText(for: composition)
+            ?? composition
     }
 
     static func resetComposition() {

@@ -203,11 +203,13 @@ final class RimePinyinEngine: @unchecked Sendable {
     }
 
     /// Selects through librime rather than merely inserting the visible text.
-    /// This is the operation that updates Rime's persistent user dictionary.
+    /// A partial candidate keeps Rime composing unless the caller explicitly
+    /// asks to accept the best conversion for every remaining segment.
     func selectCandidate(
         _ candidate: String,
-        for composition: String
-    ) -> String? {
+        for composition: String,
+        commitRemainingComposition: Bool
+    ) -> PinyinCandidateSelection? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -251,16 +253,42 @@ final class RimePinyinEngine: @unchecked Sendable {
         }
 
         var committedText = rime.getCommitText()
-        if committedText.isEmpty, !rime.getInputKeys().isEmpty,
-           rime.commitComposition() {
-            // A short candidate can select only the first segment. Committing
-            // the remaining composition preserves today's one-tap UI contract
-            // while still letting Rime learn the explicit segment choice.
+        if committedText.isEmpty,
+           commitRemainingComposition,
+           !rime.getInputKeys().isEmpty {
+            guard rime.commitComposition() else {
+                rime.cleanComposition()
+                resetCandidateIndex()
+                return nil
+            }
             committedText = rime.getCommitText()
         }
-        rime.cleanComposition()
+
+        if !committedText.isEmpty || rime.getInputKeys().isEmpty {
+            rime.cleanComposition()
+            resetCandidateIndex()
+            return .committed(committedText.isEmpty ? candidate : committedText)
+        }
+
+        let markedText = rime.context().composition.preedit ?? ""
         resetCandidateIndex()
-        return committedText.isEmpty ? candidate : committedText
+        return .composing(markedText: markedText.isEmpty ? candidate : markedText)
+    }
+
+    func markedText(for composition: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard state == .ready else {
+            return nil
+        }
+        let normalized = Self.normalizedLetters(composition)
+        guard !normalized.isEmpty,
+              synchronizeComposition(to: normalized) else {
+            return nil
+        }
+        let preedit = rime.context().composition.preedit ?? ""
+        return preedit.isEmpty ? normalized : preedit
     }
 
     func resetComposition() {
