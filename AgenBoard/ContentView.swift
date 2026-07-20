@@ -24,6 +24,8 @@ struct ContentView: View {
         SpeechServicePreferences.providerKey,
         store: SpeechServicePreferences.defaults
     ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
+    @AppStorage(GettingStartedPreferences.hasSeenGuideKey)
+    private var hasSeenGettingStartedGuide = false
     @State private var aliyunConfigured = false
     @State private var handledRecordingRequestIDs: Set<String> = []
     @State private var retriedFailedRecordingRequestIDs: Set<String> = []
@@ -39,6 +41,10 @@ struct ContentView: View {
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
     @State private var keyboardHapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
+    @State private var showsGettingStartedGuide = false
+    @State private var evaluatedInitialGuidePresentation = false
+    @State private var keyboardAccessVerified =
+        SharedCommandStore.latestKeyboardAccessVerification()?.isVerified == true
 
     private let recordingRequestLifetime: TimeInterval = 15
 
@@ -171,6 +177,45 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                     }
+
+                    NavigationLink {
+                        GettingStartedView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "sparkles.rectangle.stack")
+                                .font(.title3)
+                                .foregroundStyle(.blue)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("使用指南")
+                                    .font(.headline)
+
+                                Text(
+                                    keyboardAccessVerified
+                                        ? "键盘访问已验证 · 当前使用\(selectedProvider.shortTitle)识别"
+                                        : "完成键盘授权、状态验证和识别服务选择"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(
+                                    keyboardAccessVerified
+                                        ? Color.secondary
+                                        : Color.orange
+                                )
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(Color.blue.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     NavigationLink {
                         SpeechServiceSettingsView()
@@ -572,7 +617,16 @@ struct ContentView: View {
         } message: {
             Text(recorder.errorMessage)
         }
+        .fullScreenCover(isPresented: $showsGettingStartedGuide) {
+            NavigationStack {
+                GettingStartedView(showsCompletionAction: true)
+            }
+        }
         .onAppear {
+            if !evaluatedInitialGuidePresentation {
+                evaluatedInitialGuidePresentation = true
+                showsGettingStartedGuide = !hasSeenGettingStartedGuide
+            }
             keepsPictureInPictureAlive = true
             SharedCommandStore.setBackgroundRecordingStartReady(
                 pip.isPictureInPictureActive
@@ -627,6 +681,8 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                keyboardAccessVerified =
+                    SharedCommandStore.latestKeyboardAccessVerification()?.isVerified == true
                 if pendingReturnAttemptID != nil {
                     failPendingReturnAttempt(detail: "scene_became_active_before_background")
                 }
@@ -680,6 +736,12 @@ struct ContentView: View {
             NotificationCenter.default.publisher(for: .aliyunCredentialDidChange)
         ) { _ in
             aliyunConfigured = AliyunCredentialStore.hasAPIKey
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .keyboardAccessVerificationDidChange)
+        ) { _ in
+            keyboardAccessVerified =
+                SharedCommandStore.latestKeyboardAccessVerification()?.isVerified == true
         }
     }
 

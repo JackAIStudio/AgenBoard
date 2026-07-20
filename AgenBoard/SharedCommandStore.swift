@@ -62,6 +62,16 @@ struct SharedRecordingRequestResponse {
     let updatedAt: TimeInterval
 }
 
+struct SharedKeyboardAccessVerification {
+    let requestID: String
+    let requestedAt: TimeInterval
+    let verifiedAt: TimeInterval?
+
+    var isVerified: Bool {
+        verifiedAt != nil
+    }
+}
+
 enum RecordingLaunchMetrics {
     private static let logger = Logger(
         subsystem: "dev.local.agenboard",
@@ -177,6 +187,14 @@ enum SharedCommandStore {
     private static let keyboardHapticsEnabledKey = "keyboardHapticsEnabled"
     private static let keyboardSelectedContentModuleKey =
         "keyboardSelectedContentModule"
+    private static let keyboardAccessVerificationRequestIDKey =
+        "keyboardAccessVerificationRequestIDV1"
+    private static let keyboardAccessVerificationRequestedAtKey =
+        "keyboardAccessVerificationRequestedAtV1"
+    private static let keyboardAccessVerificationResponseIDKey =
+        "keyboardAccessVerificationResponseIDV1"
+    private static let keyboardAccessVerificationVerifiedAtKey =
+        "keyboardAccessVerificationVerifiedAtV1"
 
     private static func configuredIdentifier(
         forInfoDictionaryKey key: String,
@@ -211,6 +229,66 @@ enum SharedCommandStore {
 
         defaults.set(rawValue, forKey: keyboardSelectedContentModuleKey)
         defaults.synchronize()
+    }
+
+    @discardableResult
+    static func requestKeyboardAccessVerification() -> SharedKeyboardAccessVerification? {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return nil
+        }
+
+        let requestID = UUID().uuidString
+        let requestedAt = Date().timeIntervalSince1970
+        defaults.set(requestID, forKey: keyboardAccessVerificationRequestIDKey)
+        defaults.set(requestedAt, forKey: keyboardAccessVerificationRequestedAtKey)
+        defaults.synchronize()
+        return SharedKeyboardAccessVerification(
+            requestID: requestID,
+            requestedAt: requestedAt,
+            verifiedAt: nil
+        )
+    }
+
+    static func respondToKeyboardAccessVerification(hasFullAccess: Bool) {
+        guard hasFullAccess,
+              let defaults = UserDefaults(suiteName: appGroupIdentifier),
+              let requestID = defaults.string(
+                forKey: keyboardAccessVerificationRequestIDKey
+              ) else {
+            return
+        }
+
+        defaults.set(requestID, forKey: keyboardAccessVerificationResponseIDKey)
+        defaults.set(
+            Date().timeIntervalSince1970,
+            forKey: keyboardAccessVerificationVerifiedAtKey
+        )
+        defaults.synchronize()
+    }
+
+    static func latestKeyboardAccessVerification() -> SharedKeyboardAccessVerification? {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+              let requestID = defaults.string(
+                forKey: keyboardAccessVerificationRequestIDKey
+              ) else {
+            return nil
+        }
+
+        let responseID = defaults.string(forKey: keyboardAccessVerificationResponseIDKey)
+        let verifiedTimestamp = defaults.double(
+            forKey: keyboardAccessVerificationVerifiedAtKey
+        )
+        let verifiedAt = responseID == requestID && verifiedTimestamp > 0
+            ? verifiedTimestamp
+            : nil
+
+        return SharedKeyboardAccessVerification(
+            requestID: requestID,
+            requestedAt: defaults.double(
+                forKey: keyboardAccessVerificationRequestedAtKey
+            ),
+            verifiedAt: verifiedAt
+        )
     }
 
     static func keyboardQuickPhraseModuleVisible() -> Bool {

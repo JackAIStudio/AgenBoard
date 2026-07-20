@@ -20,105 +20,127 @@ struct SpeechServiceSettingsView: View {
 
     var body: some View {
         Form {
-            Section("识别服务") {
-                Picker("当前服务", selection: $providerRawValue) {
-                    ForEach(SpeechRecognitionProvider.allCases) { provider in
-                        Label(provider.title, systemImage: provider.systemImage)
-                            .tag(provider.rawValue)
-                    }
-                }
-                .pickerStyle(.inline)
-
-                Text(provider.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section {
-                HStack {
-                    Group {
-                        if isAPIKeyVisible {
-                            TextField("API Key（sk-…）", text: $apiKeyDraft)
-                        } else {
-                            SecureField("API Key（sk-…）", text: $apiKeyDraft)
-                        }
-                    }
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-
-                    Button {
-                        isAPIKeyVisible.toggle()
-                    } label: {
-                        Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(isAPIKeyVisible ? "隐藏 API Key" : "显示 API Key")
-                }
-
-                if hasStoredAPIKey {
-                    Label("API Key 已保存在本机钥匙串", systemImage: "checkmark.shield")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                } else {
-                    Label("尚未保存 API Key", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
-                if hasStoredAPIKey {
-                    Button {
-                        UIPasteboard.general.string = apiKeyDraft
-                        showsError = false
-                        statusMessage = "API Key 已复制"
-                    } label: {
-                        Label("复制 API Key", systemImage: "doc.on.doc")
-                    }
-                    .disabled(apiKeyDraft.isEmpty)
-                }
-
-                Label("服务地域：华北 2（北京）", systemImage: "mappin.and.ellipse")
-                    .font(.callout)
-
-                Text("当前个人版固定使用北京 DashScope 接入点，无需填写 Workspace ID。请使用在华北 2（北京）创建的百炼 API Key。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button("保存阿里云配置") {
-                    saveConfiguration()
-                }
-
-                Button {
-                    checkConnection()
-                } label: {
-                    HStack {
-                        Text("测试连接")
-                        if isChecking {
-                            Spacer()
-                            ProgressView()
-                        }
-                    }
-                }
-                .disabled(isChecking || !hasStoredAPIKey)
-
-                if hasStoredAPIKey {
-                    Button("删除本机 API Key", role: .destructive) {
-                        deleteAPIKey()
-                    }
-                }
+                SpeechProviderSelectionCards(selection: $providerRawValue)
+                    .padding(.vertical, 4)
             } header: {
-                Text("阿里云百炼")
+                Text("选择识别服务")
             } footer: {
-                Text(
-                    "阿里云模式会把录音上传到百炼临时存储，再调用 fun-asr 整段识别；启用热词时同步当前最多 100 个激活词，权重固定为 5。API Key 默认隐藏，可按需显示或复制，并且不会写入项目文件或 UserDefaults。"
-                )
+                Text("选择会立即生效。你可以随时回来切换，不会影响已经保存的识别历史。")
             }
 
-            Section("安全说明") {
-                Text(
-                    "当前方式适合你个人设备上的 MVP。若以后对外分发 App，应改为由自己的服务端保管 API Key，并给客户端签发短期凭证。"
-                )
+            if provider == .apple {
+                Section("Apple 识别说明") {
+                    Label(provider.detail, systemImage: "bolt.shield.fill")
+                        .foregroundStyle(.blue)
+
+                    if #available(iOS 26.0, *) {
+                        Text("当前系统使用设备端 SpeechAnalyzer。首次识别可能需要下载 Apple 管理的中文语音模型，安装后由系统维护和更新。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("当前系统使用 Apple Speech 兼容路径。是否需要联网由系统、设备型号和中文语音能力决定，因此 AgenBoard 不会在这些系统上承诺完全离线。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("如果结果受方言、噪声或专业词影响，可以先完善热词词库；仍不理想时，再切换到阿里云进行同一段录音的识别。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if provider == .aliyun {
+                Section {
+                    HStack {
+                        Group {
+                            if isAPIKeyVisible {
+                                TextField("API Key（sk-…）", text: $apiKeyDraft)
+                            } else {
+                                SecureField("API Key（sk-…）", text: $apiKeyDraft)
+                            }
+                        }
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        Button {
+                            isAPIKeyVisible.toggle()
+                        } label: {
+                            Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isAPIKeyVisible ? "隐藏 API Key" : "显示 API Key")
+                    }
+
+                    if hasStoredAPIKey {
+                        Label("API Key 已保存在本机钥匙串", systemImage: "checkmark.shield")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("尚未保存 API Key", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if hasStoredAPIKey {
+                        Button {
+                            UIPasteboard.general.string = apiKeyDraft
+                            showsError = false
+                            statusMessage = "API Key 已复制"
+                        } label: {
+                            Label("复制 API Key", systemImage: "doc.on.doc")
+                        }
+                        .disabled(apiKeyDraft.isEmpty)
+                    }
+
+                    Label("服务地域：华北 2（北京）", systemImage: "mappin.and.ellipse")
+                        .font(.callout)
+
+                    Text("当前个人版固定使用北京 DashScope 接入点，无需填写 Workspace ID。请使用在华北 2（北京）创建的百炼 API Key。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button("保存阿里云配置") {
+                        saveConfiguration()
+                    }
+
+                    Button {
+                        checkConnection()
+                    } label: {
+                        HStack {
+                            Text("测试连接")
+                            if isChecking {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isChecking || !hasStoredAPIKey)
+
+                    if hasStoredAPIKey {
+                        Button("删除本机 API Key", role: .destructive) {
+                            deleteAPIKey()
+                        }
+                    }
+                } header: {
+                    Text("阿里云百炼")
+                } footer: {
+                    Text(
+                        "阿里云模式会把录音上传到百炼临时存储，再调用 fun-asr 整段识别；启用热词时同步当前最多 100 个激活词，权重固定为 5。API Key 默认隐藏，可按需显示或复制，并且不会写入项目文件或 UserDefaults。"
+                    )
+                }
+            }
+
+            Section("数据与费用") {
+                Text(provider.privacySummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if provider == .aliyun {
+                    Text("录音、已启用热词和识别请求受你与阿里云之间的服务条款约束；产生的调用费用计入你自己的百炼账号。删除本机 API Key 后，AgenBoard 将无法继续调用该服务。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .navigationTitle("识别服务")

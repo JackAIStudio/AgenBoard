@@ -147,6 +147,9 @@ final class KeyboardViewController: UIInputViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        SharedCommandStore.respondToKeyboardAccessVerification(
+            hasFullAccess: hasFullAccess
+        )
         hapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
         refreshQuickPhraseModuleVisibility()
         reloadPhraseModule()
