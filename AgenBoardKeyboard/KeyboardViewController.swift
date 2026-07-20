@@ -141,12 +141,29 @@ final class KeyboardViewController: UIInputViewController,
         }
         lastHandledRecognitionResultID = SharedCommandStore.latestRecognitionResult()?.id
         setupKeyboard()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(extensionHostDidEnterBackground),
+            name: .NSExtensionHostDidEnterBackground,
+            object: nil
+        )
         warmPinyinEngine()
         refreshRecordingSnapshot()
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func extensionHostDidEnterBackground() {
+        PinyinInputEngine.suspendAndSynchronizeUserData()
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        DispatchQueue.global(qos: .utility).async {
+            PinyinInputEngine.prepare()
+        }
         SharedCommandStore.respondToKeyboardAccessVerification(
             hasFullAccess: hasFullAccess
         )
@@ -182,6 +199,7 @@ final class KeyboardViewController: UIInputViewController,
                 refreshPinyinCandidateRow()
             }
         }
+        PinyinInputEngine.suspendAndSynchronizeUserData()
         super.viewWillDisappear(animated)
     }
 

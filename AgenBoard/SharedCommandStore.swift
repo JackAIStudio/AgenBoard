@@ -863,3 +863,570 @@ enum SharedCommandStore {
         defaults.synchronize()
     }
 }
+
+enum SharedPinyinImportMode: String, Codable, Sendable {
+    case merge
+    case replace
+}
+
+struct SharedPinyinUserDataSnapshot: Sendable {
+    let url: URL
+    let entryCount: Int
+}
+
+struct SharedPendingPinyinImport: Codable, Sendable {
+    let id: UUID
+    let mode: SharedPinyinImportMode
+    let entryCount: Int
+    let createdAt: Date
+}
+
+/// Owns the portable side of Rime's learned user dictionary. Rime keeps the
+/// live database as LevelDB, while its native sync task produces a readable,
+/// mergeable `*.userdb.txt` snapshot. Only that portable snapshot crosses the
+/// app's export/import boundary.
+enum SharedPinyinUserDataStore {
+    static let dictionaryName = "rime_ice"
+    static let snapshotFileName = "\(dictionaryName).userdb.txt"
+
+    private static let pendingDirectoryName = "PendingRimeUserDataImport"
+    private static let pendingMetadataFileName = "pending.json"
+    private static let maximumSnapshotBytes = 64 * 1_024 * 1_024
+    private static let maximumEntryCount = 500_000
+    private static let maximumLineLength = 16_384
+    private static let snapshotRefreshRequiredKey =
+        "pinyinPortableSnapshotRefreshRequiredV1"
+
+    static func userDataDirectoryURL(
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        try appGroupContainerURL(fileManager: fileManager).appendingPathComponent(
+            "RimeUserData",
+            isDirectory: true
+        )
+    }
+
+    /// The keyboard remains usable before Full Access is granted by keeping a
+    /// private user dictionary. Once the App Group becomes available,
+    /// `migrateLegacyPrivateUserDataIfNeeded` copies that dictionary into the
+    /// exportable shared location.
+    static func runtimeUserDataDirectoryURL(
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let containerURL = fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier: SharedCommandStore.appGroupIdentifier
+        ) {
+            return containerURL.appendingPathComponent(
+                "RimeUserData",
+                isDirectory: true
+            )
+        }
+        return privateUserDataDirectoryURL(fileManager: fileManager)
+    }
+
+    /// Copies user data written by older builds that silently fell back to the
+    /// extension's private Application Support directory. Keeping the source
+    /// copy makes this migration recoverable if the destination later proves
+    /// unusable.
+    static func migrateLegacyPrivateUserDataIfNeeded(
+        fileManager: FileManager = .default
+    ) throws {
+        let sharedURL = try userDataDirectoryURL(fileManager: fileManager)
+        guard !fileManager.fileExists(atPath: sharedURL.path) else {
+            return
+        }
+        let legacyURL = privateUserDataDirectoryURL(fileManager: fileManager)
+        guard legacyURL.standardizedFileURL != sharedURL.standardizedFileURL,
+              fileManager.fileExists(atPath: legacyURL.path) else {
+            return
+        }
+        try fileManager.copyItem(at: legacyURL, to: sharedURL)
+    }
+
+    /// Pins librime's otherwise-relative `sync/` directory inside the shared
+    /// App Group so the keyboard extension and containing app see the same
+    /// portable snapshots.
+    static func ensureRimeSyncConfiguration(
+        at userDataURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let syncDirectory = userDataURL.appendingPathComponent(
+            "sync",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: syncDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let installationURL = userDataURL.appendingPathComponent("installation.yaml")
+        var lines: [String] = []
+        if fileManager.fileExists(atPath: installationURL.path) {
+            lines = try String(contentsOf: installationURL, encoding: .utf8)
+                .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                .map(String.init)
+        }
+
+        let escapedSyncPath = syncDirectory.path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let syncLine = "sync_dir: \"\(escapedSyncPath)\""
+        if let index = lines.firstIndex(where: { $0.hasPrefix("sync_dir:") }) {
+            lines[index] = syncLine
+        } else {
+            lines.append(syncLine)
+        }
+        if !lines.contains(where: { $0.hasPrefix("installation_id:") }) {
+            lines.append("installation_id: \"\(UUID().uuidString)\"")
+        }
+
+        let contents = lines
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n") + "\n"
+        try Data(contents.utf8).write(to: installationURL, options: .atomic)
+    }
+
+    static func latestSnapshot(
+        fileManager: FileManager = .default
+    ) throws -> SharedPinyinUserDataSnapshot? {
+        if try pendingImport(fileManager: fileManager) != nil {
+            throw SharedPinyinUserDataError.pendingImportNotApplied
+        }
+        let hasLiveDatabase = try hasLiveUserDatabase(fileManager: fileManager)
+        guard let snapshot = try currentInstallationSnapshot(
+            fileManager: fileManager
+        ) else {
+            if hasLiveDatabase {
+                throw SharedPinyinUserDataError.snapshotNotReady
+            }
+            return nil
+        }
+        if hasLiveDatabase && isPortableSnapshotRefreshRequired() {
+            throw SharedPinyinUserDataError.snapshotNotReady
+        }
+        return snapshot
+    }
+
+    /// Marks the readable artifact stale before a newly learned candidate can
+    /// be lost with the extension process. Export will refuse an older snapshot
+    /// until native sync has produced and validated its replacement.
+    static func markPortableSnapshotNeedsRefresh() {
+        guard let defaults = UserDefaults(
+            suiteName: SharedCommandStore.appGroupIdentifier
+        ) else {
+            return
+        }
+        defaults.set(true, forKey: snapshotRefreshRequiredKey)
+        defaults.synchronize()
+    }
+
+    static func markPortableSnapshotCurrent() {
+        guard let defaults = UserDefaults(
+            suiteName: SharedCommandStore.appGroupIdentifier
+        ) else {
+            return
+        }
+        defaults.set(false, forKey: snapshotRefreshRequiredKey)
+        defaults.synchronize()
+    }
+
+    /// A pre-existing LevelDB can come from an older build which learned
+    /// candidates before portable snapshots were supported. The keyboard uses
+    /// this check once during preparation so merely opening the keyboard is
+    /// enough to bootstrap that database into an exportable snapshot.
+    static func requiresPortableSnapshot(
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard (try? hasLiveUserDatabase(fileManager: fileManager)) == true else {
+            return false
+        }
+        if isPortableSnapshotRefreshRequired() {
+            return true
+        }
+        do {
+            return try currentInstallationSnapshot(fileManager: fileManager) == nil
+        } catch {
+            return true
+        }
+    }
+
+    /// Confirms that a successful native task actually produced the artifact
+    /// consumed by export instead of trusting the task's Boolean alone.
+    static func hasCompletePortableSnapshotIfNeeded(
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard (try? hasLiveUserDatabase(fileManager: fileManager)) == true else {
+            return true
+        }
+        do {
+            return try currentInstallationSnapshot(fileManager: fileManager) != nil
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    static func validateSnapshot(at url: URL) throws -> Int {
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard data.count <= maximumSnapshotBytes else {
+            throw SharedPinyinUserDataError.snapshotTooLarge
+        }
+        guard !data.contains(0), let text = String(data: data, encoding: .utf8) else {
+            throw SharedPinyinUserDataError.invalidUTF8
+        }
+
+        var hasDictionaryHeader = false
+        var hasDatabaseTypeHeader = false
+        var hasUserHeader = false
+        var entryCount = 0
+
+        for rawLine in text.split(
+            omittingEmptySubsequences: false,
+            whereSeparator: \.isNewline
+        ) {
+            guard rawLine.count <= maximumLineLength else {
+                throw SharedPinyinUserDataError.invalidLine
+            }
+            let line = String(rawLine)
+            if line.isEmpty || line.hasPrefix("# Rime user dictionary") {
+                continue
+            }
+            if line.hasPrefix("#@/") {
+                let fields = line.split(
+                    maxSplits: 1,
+                    omittingEmptySubsequences: true,
+                    whereSeparator: { $0 == "\t" || $0 == " " }
+                )
+                guard fields.count == 2 else {
+                    throw SharedPinyinUserDataError.invalidHeader
+                }
+                switch fields[0] {
+                case "#@/db_name":
+                    guard fields[1] == Substring(dictionaryName) else {
+                        throw SharedPinyinUserDataError.wrongDictionary
+                    }
+                    hasDictionaryHeader = true
+                case "#@/db_type":
+                    guard fields[1] == "userdb" else {
+                        throw SharedPinyinUserDataError.invalidHeader
+                    }
+                    hasDatabaseTypeHeader = true
+                case "#@/user_id":
+                    guard !fields[1].isEmpty else {
+                        throw SharedPinyinUserDataError.invalidHeader
+                    }
+                    hasUserHeader = true
+                default:
+                    break
+                }
+                continue
+            }
+            if line.hasPrefix("#") {
+                continue
+            }
+
+            let fields = line.split(
+                separator: "\t",
+                omittingEmptySubsequences: false
+            )
+            guard fields.count >= 3,
+                  !fields[0].isEmpty,
+                  !fields[1].isEmpty else {
+                throw SharedPinyinUserDataError.invalidLine
+            }
+            let metadata = String(fields[2])
+            guard metadata.contains("c="),
+                  metadata.contains("d="),
+                  metadata.contains("t=") else {
+                throw SharedPinyinUserDataError.invalidLine
+            }
+            entryCount += 1
+            guard entryCount <= maximumEntryCount else {
+                throw SharedPinyinUserDataError.tooManyEntries
+            }
+        }
+
+        guard hasDictionaryHeader, hasDatabaseTypeHeader, hasUserHeader else {
+            throw SharedPinyinUserDataError.invalidHeader
+        }
+        return entryCount
+    }
+
+    @discardableResult
+    static func stageImport(
+        from sourceURL: URL,
+        mode: SharedPinyinImportMode,
+        fileManager: FileManager = .default
+    ) throws -> SharedPendingPinyinImport {
+        let entryCount = try validateSnapshot(at: sourceURL)
+        let pending = SharedPendingPinyinImport(
+            id: UUID(),
+            mode: mode,
+            entryCount: entryCount,
+            createdAt: Date()
+        )
+        let containerURL = try appGroupContainerURL(fileManager: fileManager)
+        let destinationDirectory = containerURL.appendingPathComponent(
+            pendingDirectoryName,
+            isDirectory: true
+        )
+        let stagingDirectory = containerURL.appendingPathComponent(
+            ".\(pendingDirectoryName)-\(pending.id.uuidString)",
+            isDirectory: true
+        )
+
+        do {
+            try fileManager.createDirectory(
+                at: stagingDirectory,
+                withIntermediateDirectories: true
+            )
+            try fileManager.copyItem(
+                at: sourceURL,
+                to: stagingDirectory.appendingPathComponent(snapshotFileName)
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(pending).write(
+                to: stagingDirectory.appendingPathComponent(pendingMetadataFileName),
+                options: .atomic
+            )
+            if fileManager.fileExists(atPath: destinationDirectory.path) {
+                try fileManager.removeItem(at: destinationDirectory)
+            }
+            try fileManager.moveItem(at: stagingDirectory, to: destinationDirectory)
+            return pending
+        } catch {
+            try? fileManager.removeItem(at: stagingDirectory)
+            throw error
+        }
+    }
+
+    static func pendingImport(
+        fileManager: FileManager = .default
+    ) throws -> SharedPendingPinyinImport? {
+        let directory = try pendingImportDirectoryURL(fileManager: fileManager)
+        let metadataURL = directory.appendingPathComponent(pendingMetadataFileName)
+        guard fileManager.fileExists(atPath: metadataURL.path) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let pending = try decoder.decode(
+            SharedPendingPinyinImport.self,
+            from: Data(contentsOf: metadataURL)
+        )
+        let snapshotURL = directory.appendingPathComponent(snapshotFileName)
+        let actualCount = try validateSnapshot(at: snapshotURL)
+        guard actualCount == pending.entryCount else {
+            throw SharedPinyinUserDataError.entryCountMismatch
+        }
+        return pending
+    }
+
+    /// Prepares the imported snapshot under Rime's sync directory. This must be
+    /// called only while the keyboard has no active Rime session.
+    static func preparePendingImportForRime(
+        _ pending: SharedPendingPinyinImport,
+        fileManager: FileManager = .default
+    ) throws {
+        let userDataURL = try userDataDirectoryURL(fileManager: fileManager)
+        let syncDirectory = userDataURL.appendingPathComponent("sync", isDirectory: true)
+        if pending.mode == .replace {
+            if fileManager.fileExists(atPath: syncDirectory.path) {
+                try fileManager.removeItem(at: syncDirectory)
+            }
+            if fileManager.fileExists(atPath: userDataURL.path) {
+                let children = try fileManager.contentsOfDirectory(
+                    at: userDataURL,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )
+                for child in children {
+                    let name = child.lastPathComponent
+                    if name == "\(dictionaryName).userdb"
+                        || name.hasPrefix("\(dictionaryName).userdb.") {
+                        try fileManager.removeItem(at: child)
+                    }
+                }
+            }
+        }
+
+        let importDirectory = try stagedImportDirectoryURL(
+            for: pending,
+            fileManager: fileManager
+        )
+        try fileManager.createDirectory(
+            at: importDirectory,
+            withIntermediateDirectories: true
+        )
+        let destinationURL = importDirectory.appendingPathComponent(snapshotFileName)
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            try fileManager.removeItem(at: destinationURL)
+        }
+        try fileManager.copyItem(
+            at: try pendingImportDirectoryURL(fileManager: fileManager)
+                .appendingPathComponent(snapshotFileName),
+            to: destinationURL
+        )
+    }
+
+    static func completePendingImport(
+        _ pending: SharedPendingPinyinImport,
+        fileManager: FileManager = .default
+    ) {
+        try? fileManager.removeItem(
+            at: try stagedImportDirectoryURL(for: pending, fileManager: fileManager)
+        )
+        guard let current = try? pendingImport(fileManager: fileManager),
+              current.id == pending.id else {
+            return
+        }
+        try? fileManager.removeItem(
+            at: try pendingImportDirectoryURL(fileManager: fileManager)
+        )
+    }
+
+    private static func appGroupContainerURL(
+        fileManager: FileManager
+    ) throws -> URL {
+        guard let containerURL = fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier: SharedCommandStore.appGroupIdentifier
+        ) else {
+            throw SharedPinyinUserDataError.appGroupUnavailable
+        }
+        return containerURL
+    }
+
+    private static func privateUserDataDirectoryURL(
+        fileManager: FileManager
+    ) -> URL {
+        fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("RimeUserData", isDirectory: true)
+    }
+
+    private static func hasLiveUserDatabase(fileManager: FileManager) throws -> Bool {
+        fileManager.fileExists(
+            atPath: try userDataDirectoryURL(fileManager: fileManager)
+                .appendingPathComponent("\(dictionaryName).userdb", isDirectory: true)
+                .path
+        )
+    }
+
+    private static func currentInstallationSnapshot(
+        fileManager: FileManager
+    ) throws -> SharedPinyinUserDataSnapshot? {
+        guard let installationID = try installationID(fileManager: fileManager) else {
+            return nil
+        }
+        let snapshotURL = try userDataDirectoryURL(fileManager: fileManager)
+            .appendingPathComponent("sync", isDirectory: true)
+            .appendingPathComponent(installationID, isDirectory: true)
+            .appendingPathComponent(snapshotFileName)
+        guard fileManager.fileExists(atPath: snapshotURL.path) else {
+            return nil
+        }
+        return SharedPinyinUserDataSnapshot(
+            url: snapshotURL,
+            entryCount: try validateSnapshot(at: snapshotURL)
+        )
+    }
+
+    private static func isPortableSnapshotRefreshRequired() -> Bool {
+        UserDefaults(
+            suiteName: SharedCommandStore.appGroupIdentifier
+        )?.bool(forKey: snapshotRefreshRequiredKey) == true
+    }
+
+    private static func installationID(fileManager: FileManager) throws -> String? {
+        let url = try userDataDirectoryURL(fileManager: fileManager)
+            .appendingPathComponent("installation.yaml")
+        guard fileManager.fileExists(atPath: url.path) else {
+            return nil
+        }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        for line in text.split(whereSeparator: \.isNewline) {
+            let normalized = line.trimmingCharacters(in: .whitespaces)
+            guard normalized.hasPrefix("installation_id:") else {
+                continue
+            }
+            let value = normalized
+                .dropFirst("installation_id:".count)
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            guard !value.isEmpty,
+                  value != ".",
+                  value != "..",
+                  !value.contains("/"),
+                  !value.contains("\\") else {
+                throw SharedPinyinUserDataError.invalidInstallationID
+            }
+            return value
+        }
+        return nil
+    }
+
+    private static func pendingImportDirectoryURL(
+        fileManager: FileManager
+    ) throws -> URL {
+        try appGroupContainerURL(fileManager: fileManager).appendingPathComponent(
+            pendingDirectoryName,
+            isDirectory: true
+        )
+    }
+
+    private static func stagedImportDirectoryURL(
+        for pending: SharedPendingPinyinImport,
+        fileManager: FileManager
+    ) throws -> URL {
+        try userDataDirectoryURL(fileManager: fileManager)
+            .appendingPathComponent("sync", isDirectory: true)
+            .appendingPathComponent(
+                "agenboard-import-\(pending.id.uuidString)",
+                isDirectory: true
+            )
+    }
+}
+
+private enum SharedPinyinUserDataError: LocalizedError {
+    case appGroupUnavailable
+    case snapshotNotReady
+    case pendingImportNotApplied
+    case invalidInstallationID
+    case snapshotTooLarge
+    case tooManyEntries
+    case invalidUTF8
+    case invalidHeader
+    case wrongDictionary
+    case invalidLine
+    case entryCountMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .appGroupUnavailable:
+            return "无法访问 AgenBoard 的共享数据容器。请确认主 App 与键盘扩展使用同一个 App Group 签名。"
+        case .snapshotNotReady:
+            return "发现已有拼音学习数据，但可读快照尚未生成。请先打开一次 AgenBoard 键盘再返回重试，以免导出遗漏拼音偏好。"
+        case .pendingImportNotApplied:
+            return "拼音学习记录正在等待 Rime 恢复。请先打开一次 AgenBoard 键盘再返回导出，以免遗漏刚导入的偏好。"
+        case .invalidInstallationID:
+            return "Rime 安装标识无效，无法安全定位拼音学习快照。"
+        case .snapshotTooLarge:
+            return "拼音学习快照超过 64 MB 限制。"
+        case .tooManyEntries:
+            return "拼音学习快照中的记录数量过多。"
+        case .invalidUTF8:
+            return "拼音学习快照不是有效的 UTF-8 文本。"
+        case .invalidHeader:
+            return "拼音学习快照缺少有效的 Rime 用户词典头。"
+        case .wrongDictionary:
+            return "拼音学习快照不属于 AgenBoard 使用的 rime_ice 词典。"
+        case .invalidLine:
+            return "拼音学习快照包含格式不正确的记录。"
+        case .entryCountMismatch:
+            return "拼音学习快照的记录数量与导入元数据不一致。"
+        }
+    }
+}

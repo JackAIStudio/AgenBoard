@@ -110,6 +110,11 @@ struct PinyinInputEngine {
         RimePinyinEngine.shared.resetComposition()
     }
 
+    @discardableResult
+    static func suspendAndSynchronizeUserData() -> Bool {
+        RimePinyinEngine.shared.suspendAndSynchronizeUserData()
+    }
+
     private static func fallbackCandidates(
         for composition: String,
         limit: Int

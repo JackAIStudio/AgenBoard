@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 import UIKit
 
 struct DataTransferView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var historyStore: RecognitionHistoryStore
     @ObservedObject var hotwordStore: HotwordLibraryStore
     @ObservedObject var quickPhraseStore: QuickPhraseLibraryStore
@@ -14,6 +15,7 @@ struct DataTransferView: View {
     @State private var includeRecordings = false
     @State private var includeCredentials = false
     @State private var aliyunConfigured = false
+    @State private var pinyinStatus = PinyinExportStatus.checking
     @State private var showsImporter = false
     @State private var exportArtifact: PortableExportArtifact?
     @State private var importPreview: PortableImportPreview?
@@ -46,7 +48,7 @@ struct DataTransferView: View {
                     Label("开放、可读、可迁移", systemImage: "shippingbox")
                         .font(.headline)
                     Text(
-                        "导出标准 ZIP，内部使用 UTF-8 JSON、JSONL、Markdown 和可选 M4A。" +
+                        "导出标准 ZIP，内部使用 UTF-8 JSON、JSONL、Markdown、Rime TSV 和可选 M4A。" +
                         "文件可以交给 AI 编辑，也可以导入其他 AgenBoard。"
                     )
                     .font(.subheadline)
@@ -110,11 +112,20 @@ struct DataTransferView: View {
                 LabeledContent("热词", value: "\(hotwordStore.entries.count) 个")
                 LabeledContent("快捷短语", value: "\(quickPhraseStore.phrases.count) 条")
                 LabeledContent("识别历史", value: "\(historyStore.items.count) 条")
+                LabeledContent(
+                    "拼音学习",
+                    value: pinyinStatus.summary
+                )
+                if let detail = pinyinStatus.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             } header: {
                 Text("导出")
             } footer: {
                 Text(
-                    "转写文本始终导出，原始录音和 API Key 仅在你明确开启时导出；" +
+                    "转写文本和可用的拼音学习快照始终导出，原始录音和 API Key 仅在你明确开启时导出；" +
                     "钥匙串本身、缓存、临时文件、画中画和键盘运行状态不会导出。"
                 )
             }
@@ -160,6 +171,10 @@ struct DataTransferView: View {
                     detail: "一行一条识别历史，适合 AI 流式处理"
                 )
                 DataFormatRow(
+                    name: "pinyin/rime_ice.userdb.txt",
+                    detail: "Rime 可读文本快照：拼音、候选、使用次数、权重和时间"
+                )
+                DataFormatRow(
                     name: "recordings/（可选）",
                     detail: "仅在用户明确开启时包含标准 M4A 原始录音"
                 )
@@ -168,9 +183,15 @@ struct DataTransferView: View {
         .navigationTitle("导入与导出")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            aliyunConfigured = await Task.detached(priority: .utility) {
-                AliyunCredentialStore.hasAPIKey
-            }.value
+            await refreshExportMetadata()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else {
+                return
+            }
+            Task {
+                await refreshExportMetadata()
+            }
         }
         .fileImporter(
             isPresented: $showsImporter,
@@ -205,6 +226,31 @@ struct DataTransferView: View {
         } message: {
             Text(alertMessage)
         }
+    }
+
+    private func refreshExportMetadata() async {
+        async let configured = Task.detached(priority: .utility) {
+            AliyunCredentialStore.hasAPIKey
+        }.value
+        async let learnedEntries = Task.detached(priority: .utility) {
+            do {
+                guard let snapshot = try SharedPinyinUserDataStore.latestSnapshot() else {
+                    if let verification = SharedCommandStore
+                        .latestKeyboardAccessVerification(),
+                       !verification.isVerified {
+                        return PinyinExportStatus.unavailable(
+                            "键盘尚未通过完全访问验证；私有学习数据会在允许完全访问并再次打开键盘后迁移到可导出的共享快照。"
+                        )
+                    }
+                    return PinyinExportStatus.empty
+                }
+                return PinyinExportStatus.ready(snapshot.entryCount)
+            } catch {
+                return PinyinExportStatus.unavailable(error.localizedDescription)
+            }
+        }.value
+        aliyunConfigured = await configured
+        pinyinStatus = await learnedEntries
     }
 
     private func createCompleteExport() {
@@ -278,7 +324,10 @@ struct DataTransferView: View {
                 alertMessage =
                     "已\(result.mode.title)：热词 \(result.hotwordCount) 个、" +
                     "快捷短语 \(result.quickPhraseCount) 条、" +
-                    "识别历史 \(result.historyCount) 条。"
+                    "识别历史 \(result.historyCount) 条。" +
+                    (result.pinyinEntryCount.map {
+                        " 拼音学习 \($0) 条将在下次打开键盘时恢复。"
+                    } ?? "")
                 showsAlert = true
             } catch {
                 showError(title: "导入失败", error: error)
@@ -290,6 +339,33 @@ struct DataTransferView: View {
         alertTitle = title
         alertMessage = error.localizedDescription
         showsAlert = true
+    }
+}
+
+private enum PinyinExportStatus: Sendable {
+    case checking
+    case empty
+    case ready(Int)
+    case unavailable(String)
+
+    var summary: String {
+        switch self {
+        case .checking:
+            return "检查中…"
+        case .empty:
+            return "暂无学习记录"
+        case let .ready(count):
+            return "\(count) 条"
+        case .unavailable:
+            return "快照待更新"
+        }
+    }
+
+    var detail: String? {
+        guard case let .unavailable(message) = self else {
+            return nil
+        }
+        return message
     }
 }
 
@@ -355,6 +431,13 @@ private struct PortableImportPreviewView: View {
                         systemImage: "waveform",
                         count: preview.counts.recordings
                     )
+                    if preview.pinyinIncluded {
+                        ImportCountRow(
+                            title: "拼音学习记录",
+                            systemImage: "character.book.closed",
+                            count: preview.counts.pinyinEntries
+                        )
+                    }
                     if preview.credentialsIncluded {
                         ImportCountRow(
                             title: "阿里云 API Key",
@@ -366,6 +449,12 @@ private struct PortableImportPreviewView: View {
 
                 Section("智能合并预览") {
                     LabeledContent("识别与键盘偏好", value: "使用导入值")
+                    if preview.pinyinIncluded {
+                        LabeledContent(
+                            "拼音学习记录",
+                            value: "由 Rime 原生合并"
+                        )
+                    }
                     MergePreviewRow(
                         title: "热词",
                         added: preview.mergeSummary.newHotwords,
@@ -417,7 +506,8 @@ private struct PortableImportPreviewView: View {
                 } footer: {
                     Text(
                         "智能合并会用稳定 ID 更新同一条数据，并保留当前设备独有内容；" +
-                        "完全替换会以导入包覆盖当前热词、短语、偏好、历史和包内录音。"
+                        "完全替换会以导入包覆盖当前热词、短语、偏好、历史、包内录音" +
+                        (preview.pinyinIncluded ? "和拼音学习记录。" : "。")
                     )
                 }
             }
@@ -440,7 +530,12 @@ private struct PortableImportPreviewView: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("当前热词、快捷短语、识别历史和原始录音将按导入包内容替换。")
+                Text(
+                    "当前热词、快捷短语、识别历史和原始录音将按导入包内容替换。" +
+                    (preview.pinyinIncluded
+                        ? " 拼音学习记录将在下次打开键盘时替换。"
+                        : " 当前拼音学习记录会保留。")
+                )
             }
         }
     }

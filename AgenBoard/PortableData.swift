@@ -23,6 +23,41 @@ struct PortableDataCounts: Codable, Equatable, Sendable {
     let quickPhrases: Int
     let recognitionHistory: Int
     let recordings: Int
+    let pinyinEntries: Int
+
+    init(
+        hotwords: Int,
+        quickPhrases: Int,
+        recognitionHistory: Int,
+        recordings: Int,
+        pinyinEntries: Int = 0
+    ) {
+        self.hotwords = hotwords
+        self.quickPhrases = quickPhrases
+        self.recognitionHistory = recognitionHistory
+        self.recordings = recordings
+        self.pinyinEntries = pinyinEntries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hotwords
+        case quickPhrases
+        case recognitionHistory
+        case recordings
+        case pinyinEntries
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hotwords = try container.decode(Int.self, forKey: .hotwords)
+        quickPhrases = try container.decode(Int.self, forKey: .quickPhrases)
+        recognitionHistory = try container.decode(Int.self, forKey: .recognitionHistory)
+        recordings = try container.decode(Int.self, forKey: .recordings)
+        pinyinEntries = try container.decodeIfPresent(
+            Int.self,
+            forKey: .pinyinEntries
+        ) ?? 0
+    }
 }
 
 struct PortableMergeSummary: Equatable, Sendable {
@@ -43,6 +78,7 @@ struct PortableImportPreview: Identifiable, Sendable {
     let appVersion: String
     let counts: PortableDataCounts
     let credentialsIncluded: Bool
+    let pinyinIncluded: Bool
     let mergeSummary: PortableMergeSummary
     let warnings: [String]
 
@@ -54,6 +90,7 @@ struct PortableImportResult: Equatable, Sendable {
     let hotwordCount: Int
     let quickPhraseCount: Int
     let historyCount: Int
+    let pinyinEntryCount: Int?
 }
 
 @MainActor
@@ -93,6 +130,9 @@ final class PortableDataService {
             }
             : []
         let recordingIDs = Set(recordingItems.map(\.id))
+        let pinyinSnapshot = try await Task.detached(priority: .utility) {
+            try SharedPinyinUserDataStore.latestSnapshot()
+        }.value
         let snapshot = PortableExportSnapshot(
             exportedAt: Date(),
             appVersion: appVersion,
@@ -120,6 +160,12 @@ final class PortableDataService {
                 PortableRecordingSource(
                     fileName: $0.audioFileName,
                     sourceURL: historyStore.audioURL(for: $0)
+                )
+            },
+            pinyin: pinyinSnapshot.map {
+                PortablePinyinSource(
+                    sourceURL: $0.url,
+                    entryCount: $0.entryCount
                 )
             }
         )
@@ -183,6 +229,7 @@ final class PortableDataService {
             appVersion: payload.manifest.appVersion,
             counts: payload.counts,
             credentialsIncluded: payload.credentials != nil,
+            pinyinIncluded: payload.pinyinSnapshotURL != nil,
             mergeSummary: analyzeMerge(
                 payload: payload,
                 currentHotwords: hotwordStore.entries,
@@ -229,6 +276,12 @@ final class PortableDataService {
                 recordingsDirectory: payload.recordingsDirectory,
                 mode: mode
             )
+            if let pinyinSnapshotURL = payload.pinyinSnapshotURL {
+                try SharedPinyinUserDataStore.stageImport(
+                    from: pinyinSnapshotURL,
+                    mode: mode == .replace ? .replace : .merge
+                )
+            }
         } catch {
             if credentialChanged {
                 restoreCredential(previousAPIKey)
@@ -248,7 +301,10 @@ final class PortableDataService {
             mode: mode,
             hotwordCount: hotwordStore.entries.count,
             quickPhraseCount: quickPhraseStore.phrases.count,
-            historyCount: historyStore.items.count
+            historyCount: historyStore.items.count,
+            pinyinEntryCount: payload.pinyinSnapshotURL == nil
+                ? nil
+                : payload.counts.pinyinEntries
         )
     }
 
@@ -399,11 +455,17 @@ private struct PortableExportSnapshot: Sendable {
     let quickPhrases: [PortableQuickPhrase]
     let history: [PortableRecognitionRecord]
     let recordings: [PortableRecordingSource]
+    let pinyin: PortablePinyinSource?
 }
 
 private struct PortableRecordingSource: Sendable {
     let fileName: String
     let sourceURL: URL
+}
+
+private struct PortablePinyinSource: Sendable {
+    let sourceURL: URL
+    let entryCount: Int
 }
 
 private struct PortableImportPayload: Sendable {
@@ -417,6 +479,7 @@ private struct PortableImportPayload: Sendable {
     let quickPhrases: [SharedQuickPhrase]
     let history: [RecognitionHistoryItem]
     let recordingsDirectory: URL
+    let pinyinSnapshotURL: URL?
     let warnings: [String]
 }
 
@@ -742,6 +805,10 @@ private enum PortablePackageBuilder {
             "recordings",
             isDirectory: true
         )
+        let pinyinDirectory = packageDirectory.appendingPathComponent(
+            "pinyin",
+            isDirectory: true
+        )
 
         do {
             try fileManager.createDirectory(
@@ -783,6 +850,19 @@ private enum PortablePackageBuilder {
                 to: packageDirectory.appendingPathComponent("recognition-history.jsonl")
             )
 
+            if let pinyin = snapshot.pinyin {
+                try fileManager.createDirectory(
+                    at: pinyinDirectory,
+                    withIntermediateDirectories: true
+                )
+                try fileManager.copyItem(
+                    at: pinyin.sourceURL,
+                    to: pinyinDirectory.appendingPathComponent(
+                        SharedPinyinUserDataStore.snapshotFileName
+                    )
+                )
+            }
+
             var copiedRecordings = 0
             for recording in snapshot.recordings {
                 guard PortablePath.isSafeFileName(recording.fileName),
@@ -800,13 +880,15 @@ private enum PortablePackageBuilder {
                 hotwords: snapshot.hotwords.count,
                 quickPhrases: snapshot.quickPhrases.count,
                 recognitionHistory: snapshot.history.count,
-                recordings: copiedRecordings
+                recordings: copiedRecordings,
+                pinyinEntries: snapshot.pinyin?.entryCount ?? 0
             )
             let readme = PortableReadme.make(
                 exportedAt: snapshot.exportedAt,
                 appVersion: snapshot.appVersion,
                 counts: counts,
-                credentialsIncluded: snapshot.credentials != nil
+                credentialsIncluded: snapshot.credentials != nil,
+                pinyinIncluded: snapshot.pinyin != nil
             )
             try Data(readme.utf8).write(
                 to: packageDirectory.appendingPathComponent("README.md"),
@@ -987,6 +1069,27 @@ private enum PortablePackageReader {
         if credentials != nil {
             warnings.append("此数据包包含明文阿里云 API Key，导入后会保存到本机钥匙串。")
         }
+        let pinyinCandidateURL = packageRoot
+            .appendingPathComponent("pinyin", isDirectory: true)
+            .appendingPathComponent(SharedPinyinUserDataStore.snapshotFileName)
+        let pinyinSnapshotURL: URL?
+        let pinyinEntryCount: Int
+        if fileManager.fileExists(atPath: pinyinCandidateURL.path) {
+            do {
+                pinyinEntryCount = try SharedPinyinUserDataStore.validateSnapshot(
+                    at: pinyinCandidateURL
+                )
+                pinyinSnapshotURL = pinyinCandidateURL
+            } catch {
+                throw PortableDataError.invalidFormat(
+                    "拼音学习快照无效：\(error.localizedDescription)"
+                )
+            }
+        } else {
+            pinyinEntryCount = 0
+            pinyinSnapshotURL = nil
+            warnings.append("此数据包未包含拼音学习记录；导入时会保留当前设备已有的拼音偏好。")
+        }
         let hotwords = sanitizeHotwords(hotwordDocument.hotwords, warnings: &warnings)
         let quickPhrases = sanitizeQuickPhrases(
             quickPhraseDocument.quickPhrases,
@@ -1009,7 +1112,8 @@ private enum PortablePackageReader {
             hotwords: hotwords.count,
             quickPhrases: quickPhrases.count,
             recognitionHistory: history.count,
-            recordings: history.filter(\.hasRecording).count
+            recordings: history.filter(\.hasRecording).count,
+            pinyinEntries: pinyinEntryCount
         )
         if actualCounts != manifest.counts {
             warnings.append("数据内容数量与 manifest.json 不同，预览已按实际可导入内容计算。")
@@ -1026,6 +1130,7 @@ private enum PortablePackageReader {
             quickPhrases: quickPhrases,
             history: history,
             recordingsDirectory: recordingsDirectory,
+            pinyinSnapshotURL: pinyinSnapshotURL,
             warnings: warnings
         )
     }
@@ -1373,7 +1478,8 @@ private enum PortableReadme {
         exportedAt: Date,
         appVersion: String,
         counts: PortableDataCounts,
-        credentialsIncluded: Bool
+        credentialsIncluded: Bool,
+        pinyinIncluded: Bool
     ) -> String {
         let credentialDescription = credentialsIncluded
             ? "- `credentials.json`：用户明确选择导出的明文阿里云 API Key。"
@@ -1381,6 +1487,9 @@ private enum PortableReadme {
         let recordingDescription = counts.recordings > 0
             ? "- `recordings/`：用户明确选择导出的标准 M4A 原始录音，通过历史记录中的 `audio.file` 关联。"
             : "- `recordings/`：本次未包含原始录音；历史中的 `audio.included` 为 `false`，转写文本不受影响。"
+        let pinyinDescription = pinyinIncluded
+            ? "- `pinyin/rime_ice.userdb.txt`：Rime 原生 UTF-8 文本快照，包含拼音编码、候选文字及用户学习得到的次数、权重和时间数据。"
+            : "- 本数据包没有可用的拼音学习快照；导入时不会清除目标设备已有的拼音偏好。"
         return """
         # AgenBoard 可移植用户数据
 
@@ -1393,6 +1502,7 @@ private enum PortableReadme {
         - 快捷短语：\(counts.quickPhrases)
         - 识别历史：\(counts.recognitionHistory)
         - 录音：\(counts.recordings)
+        - 拼音学习记录：\(counts.pinyinEntries)
 
         ## 文件
 
@@ -1401,17 +1511,18 @@ private enum PortableReadme {
         - `hotwords.json`：热词、启用状态、置顶状态和使用时间。
         - `quick-phrases.json`：快捷短语、顺序和启用状态。
         - `recognition-history.jsonl`：每行一条识别历史，适合 AI 和脚本流式处理；转写文本始终包含。
+        \(pinyinDescription)
         \(recordingDescription)
         \(credentialDescription)
 
         ## 编辑与迁移
 
-        所有 JSON 字段均使用可读英文名称，时间采用 ISO 8601，ID 使用 UUID。
-        可以用文本编辑器、脚本或 AI 修改 JSON 后重新压缩为 ZIP 并导回 AgenBoard。
+        所有 JSON 字段均使用可读英文名称，时间采用 ISO 8601，ID 使用 UUID。拼音学习数据沿用 Rime 的可读 TSV 快照格式。
+        可以用文本编辑器、脚本或 AI 修改 JSON 或拼音快照后重新压缩为 ZIP 并导回 AgenBoard。
         修改文件后无需更新 manifest 中的校验值；导入时会提示文件已修改，但只要结构有效仍可继续。
 
-        智能合并以稳定 ID 判断同一条数据；没有相同 ID 时，热词按规范化文字去重，快捷短语按内容去重。
-        完全替换会以此数据包覆盖当前热词、短语、偏好、历史和包内录音。未附录音的历史仍可作为纯文本历史导入。
+        智能合并以稳定 ID 判断同一条数据；没有相同 ID 时，热词按规范化文字去重，快捷短语按内容去重；拼音学习记录由 Rime 原生合并。
+        完全替换会以此数据包覆盖当前热词、短语、偏好、历史、包内录音和包内拼音学习记录。未附录音的历史仍可作为纯文本历史导入。
 
         ## 隐私
 

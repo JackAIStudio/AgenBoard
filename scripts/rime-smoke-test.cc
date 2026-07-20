@@ -1,11 +1,35 @@
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include <rime_api.h>
 
 namespace {
+
+namespace fs = std::filesystem;
+
+bool HasPortableUserDictionarySnapshot(const fs::path& user_data_dir) {
+  const fs::path sync_dir = user_data_dir / "sync";
+  if (!fs::exists(sync_dir)) {
+    return false;
+  }
+  for (const auto& entry : fs::recursive_directory_iterator(sync_dir)) {
+    if (!entry.is_regular_file() ||
+        entry.path().filename() != "rime_ice.userdb.txt") {
+      continue;
+    }
+    std::ifstream stream(entry.path());
+    const std::string contents(
+        (std::istreambuf_iterator<char>(stream)),
+        std::istreambuf_iterator<char>());
+    return contents.find("#@/db_name\trime_ice") != std::string::npos &&
+           contents.find("奉献") != std::string::npos;
+  }
+  return false;
+}
 
 std::vector<std::string> Candidates(RimeApi* rime, RimeSessionId session) {
   std::vector<std::string> result;
@@ -258,9 +282,25 @@ int main(int argc, char* argv[]) {
   traits.distribution_name = "AgenBoard";
   traits.distribution_code_name = "agenboard";
   traits.distribution_version = "1";
+  const fs::path user_data_dir(argv[2]);
+  const fs::path sync_dir = user_data_dir / "sync";
+  fs::create_directories(sync_dir);
+  std::ofstream installation(user_data_dir / "installation.yaml");
+  installation << "installation_id: \"agenboard-smoke-test\"\n"
+               << "sync_dir: \"" << sync_dir.string() << "\"\n";
+  installation.close();
 
   rime->setup(&traits);
   rime->initialize(&traits);
+  // Match the iOS lifecycle: LibrimeKit starts the engine with librime's
+  // default modules, then initializes the deployer separately so tasks such
+  // as user_dict_sync are registered.
+  rime->deployer_initialize(nullptr);
+  if (!rime->run_task("installation_update")) {
+    std::fprintf(stderr, "failed to initialize Rime installation metadata\n");
+    rime->finalize();
+    return 1;
+  }
 
   const RimeSessionId session = rime->create_session();
   if (!session || !rime->select_schema(session, "agenboard_pinyin")) {
@@ -317,6 +357,39 @@ int main(int argc, char* argv[]) {
   }
 
   rime->destroy_session(session);
+  if (!rime->run_task("user_dict_sync") ||
+      !HasPortableUserDictionarySnapshot(argv[2])) {
+    std::fprintf(stderr, "failed to export portable user dictionary snapshot\n");
+    rime->finalize();
+    return 1;
+  }
+
+  const fs::path live_user_db = user_data_dir / "rime_ice.userdb";
+  const fs::path saved_user_db = user_data_dir / "rime_ice.userdb.before-restore";
+  fs::rename(live_user_db, saved_user_db);
+  const RimeSessionId empty_session = rime->create_session();
+  if (!empty_session ||
+      !rime->select_schema(empty_session, "agenboard_pinyin")) {
+    std::fprintf(stderr, "failed to create empty user dictionary for restore\n");
+    rime->finalize();
+    return 1;
+  }
+  rime->destroy_session(empty_session);
+  if (!rime->run_task("user_dict_sync")) {
+    std::fprintf(stderr, "failed to import portable user dictionary snapshot\n");
+    rime->finalize();
+    return 1;
+  }
+  const RimeSessionId restored_session = rime->create_session();
+  if (!restored_session ||
+      !rime->select_schema(restored_session, "agenboard_pinyin") ||
+      !HasExpectedFirstCandidate(
+          rime, restored_session, "fengxian", "奉献")) {
+    std::fprintf(stderr, "restored user dictionary did not retain learned ranking\n");
+    rime->finalize();
+    return 1;
+  }
+  rime->destroy_session(restored_session);
   rime->finalize();
   return 0;
 }

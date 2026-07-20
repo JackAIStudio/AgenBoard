@@ -12,6 +12,7 @@ final class RimePinyinEngine: @unchecked Sendable {
         case idle
         case preparing
         case ready
+        case suspended
         case failed
     }
 
@@ -21,9 +22,15 @@ final class RimePinyinEngine: @unchecked Sendable {
         category: "RimePinyin"
     )
     private let rime = Rime.shared
+    private let snapshotQueue = DispatchQueue(
+        label: "dev.agenboard.keyboard.rime-snapshot",
+        qos: .utility
+    )
     private var state = State.idle
     private var indexedComposition = ""
     private var candidateIndexByText: [String: Int] = [:]
+    private var learningRevision: UInt64 = 0
+    private var synchronizedRevision: UInt64 = 0
 
     private init() {}
 
@@ -32,6 +39,7 @@ final class RimePinyinEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        let isResuming: Bool
         switch state {
         case .ready:
             return true
@@ -41,80 +49,239 @@ final class RimePinyinEngine: @unchecked Sendable {
             return false
         case .idle:
             state = .preparing
+            isResuming = false
+        case .suspended:
+            state = .preparing
+            isResuming = true
         }
 
         do {
             let fileManager = FileManager.default
-            guard let sharedDataURL = Bundle.main.url(
-                forResource: "RimeData",
-                withExtension: nil
-            ) else {
-                throw PreparationError.missingBundledData
+            let pendingImport = pendingImportForPreparation(fileManager: fileManager)
+            if let pendingImport {
+                try SharedPinyinUserDataStore.preparePendingImportForRime(
+                    pendingImport,
+                    fileManager: fileManager
+                )
             }
 
-            let prebuiltDataURL = sharedDataURL.appendingPathComponent(
-                "Prebuilt",
-                isDirectory: true
-            )
-            guard fileManager.fileExists(
-                atPath: prebuiltDataURL
-                    .appendingPathComponent("rime_ice.table.bin")
-                    .path
-            ) else {
-                throw PreparationError.missingPrebuiltDictionary
+            if isResuming {
+                try reopenSession()
+            } else {
+                try startEngine(fileManager: fileManager)
             }
 
-            let containerURL = fileManager.containerURL(
-                forSecurityApplicationGroupIdentifier:
-                    SharedCommandStore.appGroupIdentifier
-            ) ?? fileManager.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            )[0]
-            let userDataURL = containerURL.appendingPathComponent(
-                "RimeUserData",
-                isDirectory: true
-            )
-            let stagingURL = userDataURL.appendingPathComponent(
-                "Build",
-                isDirectory: true
-            )
-            try fileManager.createDirectory(
-                at: userDataURL,
-                withIntermediateDirectories: true
-            )
-            try fileManager.createDirectory(
-                at: stagingURL,
-                withIntermediateDirectories: true
-            )
-
-            let traits = Rime.createTraits(
-                sharedSupportDir: sharedDataURL.path,
-                userDataDir: userDataURL.path,
-                models: ["core", "dict", "gears"]
-            )
-            traits.distributionCodeName = "AgenBoard"
-            traits.distributionName = "AgenBoard 拼音"
-            traits.prebuiltDataDir = prebuiltDataURL.path
-            traits.stagingDir = stagingURL.path
-            traits.minLogLevel = 2
-
-            // Static data is precompiled with the matching librime version, so
-            // maintenance must remain off inside the memory-limited extension.
-            rime.start(traits, maintenance: false)
-            rime.createSession()
-            guard rime.setSchema("agenboard_pinyin") else {
-                throw PreparationError.cannotSelectSchema
+            if let pendingImport {
+                // Rime requires its user dictionary to be closed while the
+                // native sync task merges a portable userdb snapshot.
+                rime.API().cleanAllSession()
+                let imported = rime.API().runTask("user_dict_sync")
+                try reopenSession()
+                if imported {
+                    SharedPinyinUserDataStore.completePendingImport(
+                        pendingImport,
+                        fileManager: fileManager
+                    )
+                    logger.notice(
+                        "已恢复 \(pendingImport.entryCount, privacy: .public) 条拼音学习记录"
+                    )
+                } else {
+                    logger.error("Rime 拼音学习记录恢复失败，将在下次打开键盘时重试")
+                }
             }
-            _ = rime.asciiMode(false)
-            rime.cleanComposition()
+
             state = .ready
+            if SharedPinyinUserDataStore.requiresPortableSnapshot(
+                fileManager: fileManager
+            ) {
+                _ = synchronizeUserDataLocked(leaveSuspended: false)
+            }
             logger.notice("Rime 拼音引擎已就绪")
-            return true
+            return state == .ready
         } catch {
             state = .failed
             logger.error("Rime 拼音引擎初始化失败：\(error.localizedDescription, privacy: .public)")
             return false
+        }
+    }
+
+    /// Flushes the live LevelDB into Rime's portable `*.userdb.txt` format and
+    /// closes the session. The next `prepare()` call reopens the engine. Keeping
+    /// the session closed while the keyboard is hidden also lets the containing
+    /// app safely stage an imported snapshot in the shared App Group.
+    @discardableResult
+    func suspendAndSynchronizeUserData() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard state == .ready else {
+            return state == .suspended
+        }
+        return synchronizeUserDataLocked(leaveSuspended: true)
+    }
+
+    private func synchronizeUserDataLocked(leaveSuspended: Bool) -> Bool {
+        rime.cleanComposition()
+        resetCandidateIndex()
+        rime.API().cleanAllSession()
+        state = .suspended
+
+        let taskCompleted = rime.API().runTask("user_dict_sync")
+        let snapshotReady =
+            SharedPinyinUserDataStore.hasCompletePortableSnapshotIfNeeded()
+        let synchronized = taskCompleted && snapshotReady
+        if synchronized {
+            synchronizedRevision = learningRevision
+            SharedPinyinUserDataStore.markPortableSnapshotCurrent()
+            logger.notice("Rime 拼音学习快照已更新")
+        } else if taskCompleted {
+            logger.error("Rime 同步任务已完成，但未生成可读取的拼音学习快照")
+        } else {
+            logger.error("Rime 用户词典同步任务执行失败")
+        }
+
+        if !leaveSuspended {
+            do {
+                try reopenSession()
+                state = .ready
+            } catch {
+                state = .failed
+                logger.error(
+                    "Rime 快照更新后无法恢复会话：\(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+        return synchronized
+    }
+
+    private func scheduleSnapshotAfterLearning() {
+        learningRevision &+= 1
+        SharedPinyinUserDataStore.markPortableSnapshotNeedsRefresh()
+        let revision = learningRevision
+        snapshotQueue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.synchronizeUserDataIfCurrent(revision)
+        }
+    }
+
+    private func synchronizeUserDataIfCurrent(_ revision: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard state == .ready,
+              revision == learningRevision,
+              revision > synchronizedRevision else {
+            return
+        }
+        if !rime.getInputKeys().isEmpty {
+            snapshotQueue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.synchronizeUserDataIfCurrent(revision)
+            }
+            return
+        }
+        _ = synchronizeUserDataLocked(leaveSuspended: false)
+    }
+
+    private func startEngine(fileManager: FileManager) throws {
+        guard let sharedDataURL = Bundle.main.url(
+            forResource: "RimeData",
+            withExtension: nil
+        ) else {
+            throw PreparationError.missingBundledData
+        }
+
+        let prebuiltDataURL = sharedDataURL.appendingPathComponent(
+            "Prebuilt",
+            isDirectory: true
+        )
+        guard fileManager.fileExists(
+            atPath: prebuiltDataURL
+                .appendingPathComponent("rime_ice.table.bin")
+                .path
+        ) else {
+            throw PreparationError.missingPrebuiltDictionary
+        }
+
+        do {
+            try SharedPinyinUserDataStore.migrateLegacyPrivateUserDataIfNeeded(
+                fileManager: fileManager
+            )
+        } catch {
+            logger.warning(
+                "Rime 暂时使用键盘私有存储，获得 App Group 访问后会迁移：\(error.localizedDescription, privacy: .public)"
+            )
+        }
+        let userDataURL = SharedPinyinUserDataStore.runtimeUserDataDirectoryURL(
+            fileManager: fileManager
+        )
+        let stagingURL = userDataURL.appendingPathComponent(
+            "Build",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: userDataURL,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: stagingURL,
+            withIntermediateDirectories: true
+        )
+        try SharedPinyinUserDataStore.ensureRimeSyncConfiguration(
+            at: userDataURL,
+            fileManager: fileManager
+        )
+
+        let traits = Rime.createTraits(
+            sharedSupportDir: sharedDataURL.path,
+            userDataDir: userDataURL.path
+        )
+        traits.distributionCodeName = "AgenBoard"
+        traits.distributionName = "AgenBoard 拼音"
+        traits.prebuiltDataDir = prebuiltDataURL.path
+        traits.stagingDir = stagingURL.path
+        traits.minLogLevel = 2
+
+        // Static data is precompiled with the matching librime version, so
+        // maintenance must remain off inside the memory-limited extension.
+        rime.start(traits, maintenance: false)
+        // LibrimeKit 0.1.0 does not forward `LRKTraits.modules` into the
+        // underlying RimeTraits struct. Normal input still works because
+        // librime loads its default engine modules, but deployment tasks such
+        // as `user_dict_sync` are then absent. Initializing the deployer with
+        // nil preserves the existing data paths and loads kDeployerModules,
+        // which contains the native portable-user-dictionary sync task.
+        rime.API().deployerInitialize(nil)
+        if !rime.API().runTask("installation_update") {
+            logger.error("Rime 安装标识初始化失败，用户词典同步可能不可用")
+        }
+        rime.createSession()
+        try configureCurrentSession()
+    }
+
+    private func reopenSession() throws {
+        // `cleanAllSession()` closes librime's session but the wrapper keeps
+        // the old numeric id. `restSession()` replaces that stale id.
+        rime.restSession()
+        try configureCurrentSession()
+    }
+
+    private func configureCurrentSession() throws {
+        guard rime.setSchema("agenboard_pinyin") else {
+            throw PreparationError.cannotSelectSchema
+        }
+        _ = rime.asciiMode(false)
+        rime.cleanComposition()
+        resetCandidateIndex()
+    }
+
+    private func pendingImportForPreparation(
+        fileManager: FileManager
+    ) -> SharedPendingPinyinImport? {
+        do {
+            return try SharedPinyinUserDataStore.pendingImport(fileManager: fileManager)
+        } catch {
+            logger.error(
+                "无法读取待恢复的拼音学习快照：\(error.localizedDescription, privacy: .public)"
+            )
+            return nil
         }
     }
 
@@ -267,6 +434,7 @@ final class RimePinyinEngine: @unchecked Sendable {
         if !committedText.isEmpty || rime.getInputKeys().isEmpty {
             rime.cleanComposition()
             resetCandidateIndex()
+            scheduleSnapshotAfterLearning()
             return .committed(committedText.isEmpty ? candidate : committedText)
         }
 
