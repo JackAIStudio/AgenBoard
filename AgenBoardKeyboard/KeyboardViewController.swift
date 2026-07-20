@@ -464,6 +464,18 @@ final class KeyboardViewController: UIInputViewController,
             width: 112
         )
         let deleteButton = makeVoiceDeleteButton()
+        let commaButton = makeVoiceUtilityButton(
+            title: ",",
+            accessibilityLabel: "英文逗号",
+            action: #selector(insertComma),
+            style: .secondary
+        )
+        let periodButton = makeVoiceUtilityButton(
+            title: ".",
+            accessibilityLabel: "英文句号",
+            action: #selector(insertPeriod),
+            style: .secondary
+        )
         let atButton = makeVoiceUtilityButton(
             title: "@",
             accessibilityLabel: "艾特符号",
@@ -486,7 +498,8 @@ final class KeyboardViewController: UIInputViewController,
         textInputButtonRow.spacing = 8
         textInputButtonRow.translatesAutoresizingMaskIntoConstraints = false
 
-        [deleteButton, atButton, textInputButtonRow].forEach(canvas.addSubview)
+        [commaButton, periodButton, deleteButton, atButton, textInputButtonRow]
+            .forEach(canvas.addSubview)
 
         let widthConstraint = recordingButton.widthAnchor.constraint(equalToConstant: 128)
         let heightConstraint = recordingButton.heightAnchor.constraint(equalToConstant: 56)
@@ -516,6 +529,16 @@ final class KeyboardViewController: UIInputViewController,
                 constant: -10
             ),
 
+            commaButton.trailingAnchor.constraint(
+                equalTo: textInputButtonRow.leadingAnchor,
+                constant: -9
+            ),
+            commaButton.centerYAnchor.constraint(
+                equalTo: recordingButton.centerYAnchor,
+                constant: 7
+            ),
+            periodButton.centerXAnchor.constraint(equalTo: commaButton.centerXAnchor),
+            periodButton.topAnchor.constraint(equalTo: commaButton.bottomAnchor, constant: 8),
             deleteButton.leadingAnchor.constraint(
                 equalTo: textInputButtonRow.trailingAnchor,
                 constant: 9
@@ -2639,6 +2662,20 @@ final class KeyboardViewController: UIInputViewController,
             refreshPinyinCandidateRow()
         }
         insert("@")
+    }
+
+    @objc private func insertComma() {
+        if commitBestPinyinCandidateIfNeeded() {
+            refreshPinyinCandidateRow()
+        }
+        insert(",")
+    }
+
+    @objc private func insertPeriod() {
+        if commitBestPinyinCandidateIfNeeded() {
+            refreshPinyinCandidateRow()
+        }
+        insert(".")
     }
 
     @objc private func startDeleting() {
