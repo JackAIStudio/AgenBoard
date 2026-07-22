@@ -131,7 +131,25 @@ final class SpeechRecorder: ObservableObject {
     }
 
     func publishCurrentSnapshot() {
+        refreshKeyboardDeliveryStatusIfNeeded()
         publishRecordingSnapshot(status: status)
+    }
+
+    private func refreshKeyboardDeliveryStatusIfNeeded() {
+        guard status.contains("等待键盘填入"),
+              let result = SharedCommandStore.latestRecognitionResult() else {
+            return
+        }
+
+        if SharedCommandStore.latestInsertedRecognitionResultID() == result.id,
+           SharedCommandStore.latestRecognitionResultInsertionAttemptedAt() > 0 {
+            status = status.replacingOccurrences(
+                of: "等待键盘填入",
+                with: "已发送至键盘"
+            )
+        } else if !SharedCommandStore.isKeyboardAutoInsertPending() {
+            status = "识别完成，但未能自动填入；请复制识别结果"
+        }
     }
 
     func clear() {
@@ -151,6 +169,7 @@ final class SpeechRecorder: ObservableObject {
         isTranscribing = false
         transcript = ""
         SharedCommandStore.clearRecognitionResult()
+        SharedCommandStore.cancelKeyboardAutoInsert()
         audioLevel = 0
         smoothedAudioLevel = 0
         peakAudioLevel = 0
@@ -175,6 +194,11 @@ final class SpeechRecorder: ObservableObject {
             request: request
         )
         currentProvider = SpeechServicePreferences.provider
+        if request == nil {
+            // A recording started directly in the containing app must not consume
+            // a stale insertion request left by an earlier keyboard session.
+            SharedCommandStore.cancelKeyboardAutoInsert()
+        }
         if currentProvider == .aliyun {
             do {
                 _ = try AliyunSpeechConfiguration.load()
@@ -567,15 +591,22 @@ final class SpeechRecorder: ObservableObject {
             status = "未识别到文字"
             SharedCommandStore.cancelKeyboardAutoInsert()
         } else {
-            status = "识别完成 · \(provider.shortTitle)\(completionNote)"
-            SharedCommandStore.publishRecognitionResult(transcript)
+            let baseStatus = "识别完成 · \(provider.shortTitle)\(completionNote)"
+            if SharedCommandStore.publishRecognitionResult(transcript) != nil {
+                status = SharedCommandStore.isKeyboardAutoInsertPending()
+                    ? "\(baseStatus) · 等待键盘填入"
+                    : baseStatus
+            } else {
+                status = "识别完成，但无法发送到键盘"
+                showError("识别已经完成，但无法写入键盘共享数据。请复制识别结果后重试。")
+            }
         }
         publishRecordingSnapshot(status: status)
     }
 
     private func failTranscription(_ message: String) {
         isTranscribing = false
-        status = "识别失败"
+        status = message
         if let currentHistoryItemID {
             historyStore.storeFailure(
                 itemID: currentHistoryItemID,

@@ -5,6 +5,7 @@ final class KeyboardViewController: UIInputViewController,
     UICollectionViewDelegateFlowLayout {
     private static let pinyinCandidatePageSize = 48
     private static let pinyinCandidateCellIdentifier = "PinyinCandidateCell"
+    private static let automaticInsertionValidity: TimeInterval = 15 * 60
     private enum ContentModule: Int {
         case voice = 0
         case phrases = 1
@@ -111,7 +112,10 @@ final class KeyboardViewController: UIInputViewController,
     private let selectionFeedbackGenerator = UISelectionFeedbackGenerator()
     private var hapticsEnabled = true
     private var lastHandledRecognitionResultID: String?
+    private var lastInsertionDiagnosticState: String?
+    private var retryableRecognitionResultID: String?
     private var insertionMessageUntil: TimeInterval = 0
+    private var insertionMessageColor = UIColor.systemGreen
     private var appLaunchRequestedAt: TimeInterval?
     private var appOpenVerificationTask: Task<Void, Never>?
     private var recordingCommandFallbackTask: Task<Void, Never>?
@@ -139,7 +143,14 @@ final class KeyboardViewController: UIInputViewController,
                 ContentModule.keyboard.rawValue
             )
         }
-        lastHandledRecognitionResultID = SharedCommandStore.latestRecognitionResult()?.id
+        let hasPendingInsertion = SharedCommandStore.isKeyboardAutoInsertPending()
+        lastHandledRecognitionResultID = hasPendingInsertion
+            ? SharedCommandStore.latestInsertedRecognitionResultID()
+            : SharedCommandStore.latestRecognitionResult()?.id
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "keyboard_result_state_restored",
+            detail: "pending=\(hasPendingInsertion ? 1 : 0) handled=\(lastHandledRecognitionResultID == nil ? 0 : 1)"
+        )
         setupKeyboard()
         NotificationCenter.default.addObserver(
             self,
@@ -423,6 +434,13 @@ final class KeyboardViewController: UIInputViewController,
         statusLabel.textAlignment = .center
         statusLabel.numberOfLines = 1
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.isUserInteractionEnabled = true
+        statusLabel.addGestureRecognizer(
+            UITapGestureRecognizer(
+                target: self,
+                action: #selector(retryFailedRecognitionResultInsertion)
+            )
+        )
         canvas.addSubview(statusLabel)
 
         var recordingConfiguration = UIButton.Configuration.filled()
@@ -2009,7 +2027,8 @@ final class KeyboardViewController: UIInputViewController,
 
         let snapshot = SharedCommandStore.latestRecordingSnapshot()
         let now = Date().timeIntervalSince1970
-        let isFresh = now - snapshot.updatedAt < 1.5
+        let snapshotAge = now - snapshot.updatedAt
+        let isFresh = snapshotAge >= -0.5 && snapshotAge < 1.5
         let isActive = isFresh && snapshot.isRecording
         let isTranscribing = isFresh && snapshot.isTranscribing
         let shouldKeepInsertionMessage = now < insertionMessageUntil
@@ -2017,7 +2036,16 @@ final class KeyboardViewController: UIInputViewController,
         let isLaunchingApp = appLaunchRequestedAt.map { now - $0 < 8 } ?? false
         let isAwaitingRecordingCommand = recordingCommandFallbackTask != nil
             || hostCaptureTask != nil
-        let snapshotError = isFresh ? voiceErrorMessage(from: snapshot.status) : nil
+        let statusAge = now - snapshot.statusChangedAt
+        let snapshotError = statusAge >= -0.5 && statusAge < 30
+            ? voiceErrorMessage(from: snapshot.status)
+            : nil
+
+        if !shouldKeepInsertionMessage {
+            retryableRecognitionResultID = nil
+            statusLabel.accessibilityHint = nil
+            statusLabel.accessibilityTraits = .staticText
+        }
 
         if isFresh {
             appLaunchRequestedAt = nil
@@ -2032,7 +2060,7 @@ final class KeyboardViewController: UIInputViewController,
         )
 
         if shouldKeepInsertionMessage {
-            statusLabel.textColor = .systemGreen
+            statusLabel.textColor = insertionMessageColor
         } else if shouldShowLaunchFailure, let launchFailureMessage {
             statusLabel.text = launchFailureMessage
             statusLabel.textColor = .systemRed
@@ -2057,11 +2085,42 @@ final class KeyboardViewController: UIInputViewController,
     }
 
     private func voiceErrorMessage(from status: String) -> String? {
-        let errorMarkers = ["失败", "错误", "权限", "未授权", "拒绝", "不允许", "不可用"]
+        let errorMarkers = [
+            "失败", "错误", "权限", "未授权", "拒绝", "不允许", "不可用",
+            "未识别到文字", "未能", "无法"
+        ]
         guard errorMarkers.contains(where: status.contains) else {
             return nil
         }
-        return status.count <= 24 ? status : "语音输入失败，请重试"
+        let normalizedStatus = status.lowercased()
+        if status.contains("未识别到文字") {
+            return "未识别到文字，请重试"
+        }
+        if status.contains("未能自动填入") || status.contains("无法发送到键盘") {
+            return "未能自动填入，请打开 AgenBoard 复制结果"
+        }
+        if status.contains("阿里云") {
+            let quotaMarkers = [
+                "quota", "balance", "insufficient", "billing", "余额", "额度", "欠费"
+            ]
+            if quotaMarkers.contains(where: normalizedStatus.contains) {
+                return "阿里云额度不足，请检查百炼账户"
+            }
+            let credentialMarkers = [
+                "api key", "unauthorized", "forbidden", "invalidapi", "鉴权", "401", "403"
+            ]
+            if credentialMarkers.contains(where: normalizedStatus.contains) {
+                return "阿里云 API Key 无效，请打开 AgenBoard 检查"
+            }
+            if normalizedStatus.contains("timeout") || status.contains("超时") {
+                return "阿里云识别超时，请稍后重试"
+            }
+            return "阿里云识别失败，请打开 AgenBoard 查看详情"
+        }
+        if status.contains("权限") || status.contains("未授权") || status.contains("不允许") {
+            return "录音权限不可用，请打开 AgenBoard 检查"
+        }
+        return "语音识别失败，请打开 AgenBoard 查看详情"
     }
 
     private func updateRecordingButton(
@@ -2172,37 +2231,149 @@ final class KeyboardViewController: UIInputViewController,
         return components.url
     }
 
-    private func insertRecognitionResultIfNeeded(isRecording: Bool, isTranscribing: Bool, now: TimeInterval) {
-        guard !isRecording,
-              !isTranscribing,
-              SharedCommandStore.isKeyboardAutoInsertPending(),
-              let result = SharedCommandStore.latestRecognitionResult(),
-              result.id != lastHandledRecognitionResultID,
-              result.id != SharedCommandStore.latestInsertedRecognitionResultID() else {
+    private func insertRecognitionResultIfNeeded(
+        isRecording: Bool,
+        isTranscribing: Bool,
+        now: TimeInterval
+    ) {
+        guard !isRecording, !isTranscribing else {
+            return
+        }
+
+        guard SharedCommandStore.isKeyboardAutoInsertPending() else {
+            lastInsertionDiagnosticState = nil
             return
         }
 
         let requestedAt = SharedCommandStore.latestKeyboardAutoInsertRequestedAt()
-        guard now - requestedAt < 900 else {
+        let availableResult = SharedCommandStore.latestRecognitionResult()
+        guard requestedAt > 0,
+              now - requestedAt >= -1,
+              now - requestedAt < Self.automaticInsertionValidity else {
+            recordInsertionState("auto_insert_request_expired")
+            SharedCommandStore.cancelKeyboardAutoInsert()
+            let retryableResult = availableResult.flatMap { result in
+                requestedAt > 0
+                    && resultMatchesCurrentAutoInsertRequest(result, requestedAt: requestedAt)
+                    ? result
+                    : nil
+            }
+            showTransientVoiceStatus(
+                retryableResult == nil
+                    ? "识别结果已过期，请重新录音"
+                    : "未能自动填入，点此重试",
+                color: .systemRed,
+                duration: retryableResult == nil ? 4 : 8,
+                now: now,
+                retryableResultID: retryableResult?.id
+            )
+            return
+        }
+
+        guard let result = availableResult else {
+            recordInsertionState("auto_insert_waiting_for_result")
+            return
+        }
+
+        guard resultMatchesCurrentAutoInsertRequest(result, requestedAt: requestedAt) else {
+            recordInsertionState(
+                "auto_insert_waiting_for_matching_result",
+                detail: "id=\(result.id)"
+            )
+            return
+        }
+
+        let attemptedResultID = SharedCommandStore.latestInsertedRecognitionResultID()
+        guard result.id != lastHandledRecognitionResultID,
+              result.id != attemptedResultID else {
+            recordInsertionState(
+                "auto_insert_already_attempted",
+                detail: "id=\(result.id)"
+            )
             SharedCommandStore.cancelKeyboardAutoInsert()
             return
         }
 
-        let isFromCurrentKeyboardRequest = requestedAt > 0
-            && result.createdAt >= requestedAt
-            && result.createdAt - requestedAt < 900
-        let isRecentResult = now - result.createdAt < 30
+        performRecognitionResultInsertion(result, source: "automatic", now: now)
+    }
 
-        guard isFromCurrentKeyboardRequest, isRecentResult else {
+    private func resultMatchesCurrentAutoInsertRequest(
+        _ result: SharedRecognitionResult,
+        requestedAt: TimeInterval
+    ) -> Bool {
+        if result.autoInsertRequestedAt > 0 {
+            return abs(result.autoInsertRequestedAt - requestedAt) < 0.5
+        }
+
+        // Compatibility for a result published by an older build that did not
+        // persist the originating insertion request timestamp.
+        return result.createdAt >= requestedAt
+            && result.createdAt - requestedAt < Self.automaticInsertionValidity
+    }
+
+    private func performRecognitionResultInsertion(
+        _ result: SharedRecognitionResult,
+        source: String,
+        now: TimeInterval
+    ) {
+        // textDocumentProxy does not acknowledge whether the host accepted the
+        // text, so this state intentionally records an attempt, not confirmation.
+        textDocumentProxy.insertText(result.text)
+        lastHandledRecognitionResultID = result.id
+        SharedCommandStore.markRecognitionResultInsertionAttempted(result.id)
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "recognition_insert_text_called",
+            detail: "id=\(result.id) source=\(source) chars=\(result.text.count)"
+        )
+        showTransientVoiceStatus(
+            source == "automatic" ? "已输入" : "已重新输入",
+            color: .systemGreen,
+            duration: 1.2,
+            now: now
+        )
+        lastInsertionDiagnosticState = nil
+    }
+
+    private func showTransientVoiceStatus(
+        _ text: String,
+        color: UIColor,
+        duration: TimeInterval,
+        now: TimeInterval,
+        retryableResultID: String? = nil
+    ) {
+        statusLabel.text = text
+        statusLabel.textColor = color
+        insertionMessageColor = color
+        insertionMessageUntil = now + duration
+        retryableRecognitionResultID = retryableResultID
+        statusLabel.accessibilityHint = retryableResultID == nil
+            ? nil
+            : "轻点重新填入最近一次识别结果"
+        statusLabel.accessibilityTraits = retryableResultID == nil ? .staticText : .button
+    }
+
+    private func recordInsertionState(_ state: String, detail: String = "") {
+        let fingerprint = detail.isEmpty ? state : "\(state)|\(detail)"
+        guard fingerprint != lastInsertionDiagnosticState else {
             return
         }
 
-        textDocumentProxy.insertText(result.text)
-        lastHandledRecognitionResultID = result.id
-        SharedCommandStore.markRecognitionResultInserted(result.id)
-        statusLabel.text = "已插入"
-        statusLabel.textColor = .systemGreen
-        insertionMessageUntil = now + 1.5
+        lastInsertionDiagnosticState = fingerprint
+        SharedCommandStore.recordKeyboardDiagnostic(state, detail: detail)
+    }
+
+    @objc private func retryFailedRecognitionResultInsertion() {
+        guard let retryableRecognitionResultID,
+              let result = SharedCommandStore.latestRecognitionResult(),
+              result.id == retryableRecognitionResultID else {
+            return
+        }
+
+        performRecognitionResultInsertion(
+            result,
+            source: "failure_retry",
+            now: Date().timeIntervalSince1970
+        )
     }
 
     private func openContainingApp(
