@@ -1,8 +1,66 @@
 import Foundation
 
+enum AliyunVocabularyTarget: Sendable {
+    case file
+    case realtime
+
+    var model: String {
+        switch self {
+        case .file:
+            return "fun-asr"
+        case .realtime:
+            return "fun-asr-realtime"
+        }
+    }
+
+    var cachedID: String? {
+        switch self {
+        case .file:
+            return SpeechServicePreferences.cachedAliyunVocabularyID
+        case .realtime:
+            return SpeechServicePreferences.cachedAliyunRealtimeVocabularyID
+        }
+    }
+
+    var cachedFingerprint: String? {
+        switch self {
+        case .file:
+            return SpeechServicePreferences.cachedAliyunVocabularyFingerprint
+        case .realtime:
+            return SpeechServicePreferences.cachedAliyunRealtimeVocabularyFingerprint
+        }
+    }
+
+    func cache(id: String, fingerprint: String) {
+        switch self {
+        case .file:
+            SpeechServicePreferences.cacheAliyunVocabulary(id: id, fingerprint: fingerprint)
+        case .realtime:
+            SpeechServicePreferences.cacheAliyunRealtimeVocabulary(
+                id: id,
+                fingerprint: fingerprint
+            )
+        }
+    }
+
+    func clearCache() {
+        switch self {
+        case .file:
+            SpeechServicePreferences.clearAliyunFileVocabularyCache()
+        case .realtime:
+            SpeechServicePreferences.clearAliyunRealtimeVocabularyCache()
+        }
+    }
+}
+
+struct AliyunVocabularySetup: Sendable {
+    let id: String?
+    let acceptedTerms: [String]
+    let ignoredTerms: [String]
+}
+
 @MainActor
 enum AliyunSpeechTranscriber {
-    private static let model = "fun-asr"
     private static let vocabularyWeight = 5
 
     static func transcribe(
@@ -15,32 +73,48 @@ enum AliyunSpeechTranscriber {
         let configuration = try AliyunSpeechConfiguration.load()
 
         progress("阿里云 · 正在同步热词")
+        var stageStartedAt = Date()
         let vocabulary = try await ensureVocabulary(
             hotwords: hotwords,
+            target: .file,
             configuration: configuration
         )
+        let vocabularyElapsed = Date().timeIntervalSince(stageStartedAt)
+
+        progress("阿里云 · 正在获取临时上传凭证")
+        stageStartedAt = Date()
+        let uploadPolicy = try await fetchUploadPolicy(configuration: configuration)
+        let uploadPolicyElapsed = Date().timeIntervalSince(stageStartedAt)
 
         progress("阿里云 · 正在上传录音")
+        stageStartedAt = Date()
         let temporaryAudioURL = try await uploadAudio(
             at: audioURL,
-            configuration: configuration
+            policy: uploadPolicy
         )
+        let uploadTransferElapsed = Date().timeIntervalSince(stageStartedAt)
 
         progress("阿里云 · 正在提交识别")
+        stageStartedAt = Date()
         let taskID = try await submitTranscription(
             audioURL: temporaryAudioURL,
             vocabularyID: vocabulary.id,
             configuration: configuration
         )
+        let taskSubmissionElapsed = Date().timeIntervalSince(stageStartedAt)
 
         progress("阿里云 · 正在识别整段录音")
+        stageStartedAt = Date()
         let resultURL = try await waitForTranscription(
             taskID: taskID,
             configuration: configuration
         )
+        let cloudProcessingElapsed = Date().timeIntervalSince(stageStartedAt)
 
         progress("阿里云 · 正在下载识别结果")
+        stageStartedAt = Date()
         let document = try await downloadTranscription(from: resultURL)
+        let resultDownloadElapsed = Date().timeIntervalSince(stageStartedAt)
         let transcript = document.transcripts.map(\.text).joined()
         let words = document.transcripts.flatMap { transcript in
             (transcript.sentences ?? []).flatMap { sentence in
@@ -60,7 +134,15 @@ enum AliyunSpeechTranscriber {
             elapsed: Date().timeIntervalSince(startedAt),
             words: words,
             configuredHotwordCount: vocabulary.acceptedTerms.count,
-            ignoredHotwords: vocabulary.ignoredTerms
+            ignoredHotwords: vocabulary.ignoredTerms,
+            fileMetrics: AliyunFileRecognitionMetrics(
+                vocabularyElapsed: vocabularyElapsed,
+                uploadPolicyElapsed: uploadPolicyElapsed,
+                uploadTransferElapsed: uploadTransferElapsed,
+                taskSubmissionElapsed: taskSubmissionElapsed,
+                cloudProcessingElapsed: cloudProcessingElapsed,
+                resultDownloadElapsed: resultDownloadElapsed
+            )
         )
     }
 
@@ -87,10 +169,22 @@ enum AliyunSpeechTranscriber {
         _ = try await send(request)
     }
 
+    static func prepareVocabulary(
+        hotwords: [String],
+        target: AliyunVocabularyTarget
+    ) async throws -> AliyunVocabularySetup {
+        try await ensureVocabulary(
+            hotwords: hotwords,
+            target: target,
+            configuration: try AliyunSpeechConfiguration.load()
+        )
+    }
+
     private static func ensureVocabulary(
         hotwords: [String],
+        target: AliyunVocabularyTarget,
         configuration: AliyunSpeechConfiguration
-    ) async throws -> VocabularySetup {
+    ) async throws -> AliyunVocabularySetup {
         let acceptedTerms = validVocabularyTerms(from: hotwords)
         let acceptedKeys = Set(acceptedTerms.map(HotwordLibraryStorage.comparisonKey))
         let ignoredTerms = hotwords.filter {
@@ -98,32 +192,37 @@ enum AliyunSpeechTranscriber {
         }
 
         guard !acceptedTerms.isEmpty else {
-            return VocabularySetup(id: nil, acceptedTerms: [], ignoredTerms: ignoredTerms)
+            return AliyunVocabularySetup(
+                id: nil,
+                acceptedTerms: [],
+                ignoredTerms: ignoredTerms
+            )
         }
 
         let fingerprint = vocabularyFingerprint(
             terms: acceptedTerms,
+            target: target,
             baseURL: configuration.apiBaseURL
         )
 
-        if let cachedID = SpeechServicePreferences.cachedAliyunVocabularyID {
+        if let cachedID = target.cachedID {
             do {
                 let state = try await queryVocabulary(
                     id: cachedID,
                     configuration: configuration
                 )
-                guard state.targetModel == nil || state.targetModel == model else {
-                    SpeechServicePreferences.clearAliyunVocabularyCache()
+                guard state.targetModel == nil || state.targetModel == target.model else {
+                    target.clearCache()
                     return try await createVocabulary(
                         terms: acceptedTerms,
                         ignoredTerms: ignoredTerms,
                         fingerprint: fingerprint,
+                        target: target,
                         configuration: configuration
                     )
                 }
 
-                let needsUpdate =
-                    SpeechServicePreferences.cachedAliyunVocabularyFingerprint != fingerprint
+                let needsUpdate = target.cachedFingerprint != fingerprint
                 if needsUpdate {
                     try await updateVocabulary(
                         id: cachedID,
@@ -136,18 +235,15 @@ enum AliyunSpeechTranscriber {
                     initialState: needsUpdate ? nil : state.status,
                     configuration: configuration
                 )
-                SpeechServicePreferences.cacheAliyunVocabulary(
-                    id: cachedID,
-                    fingerprint: fingerprint
-                )
-                return VocabularySetup(
+                target.cache(id: cachedID, fingerprint: fingerprint)
+                return AliyunVocabularySetup(
                     id: cachedID,
                     acceptedTerms: acceptedTerms,
                     ignoredTerms: ignoredTerms
                 )
             } catch let error as AliyunSpeechServiceError
                 where error.permitsVocabularyRecreation {
-                SpeechServicePreferences.clearAliyunVocabularyCache()
+                target.clearCache()
             }
         }
 
@@ -155,6 +251,7 @@ enum AliyunSpeechTranscriber {
             terms: acceptedTerms,
             ignoredTerms: ignoredTerms,
             fingerprint: fingerprint,
+            target: target,
             configuration: configuration
         )
     }
@@ -163,11 +260,12 @@ enum AliyunSpeechTranscriber {
         terms: [String],
         ignoredTerms: [String],
         fingerprint: String,
+        target: AliyunVocabularyTarget,
         configuration: AliyunSpeechConfiguration
-    ) async throws -> VocabularySetup {
+    ) async throws -> AliyunVocabularySetup {
         let input: [String: Any] = [
             "action": "create_vocabulary",
-            "target_model": model,
+            "target_model": target.model,
             "prefix": "agenboard",
             "vocabulary": vocabularyPayload(terms)
         ]
@@ -180,8 +278,12 @@ enum AliyunSpeechTranscriber {
             initialState: nil,
             configuration: configuration
         )
-        SpeechServicePreferences.cacheAliyunVocabulary(id: id, fingerprint: fingerprint)
-        return VocabularySetup(id: id, acceptedTerms: terms, ignoredTerms: ignoredTerms)
+        target.cache(id: id, fingerprint: fingerprint)
+        return AliyunVocabularySetup(
+            id: id,
+            acceptedTerms: terms,
+            ignoredTerms: ignoredTerms
+        )
     }
 
     private static func updateVocabulary(
@@ -276,8 +378,16 @@ enum AliyunSpeechTranscriber {
         }
     }
 
-    private static func vocabularyFingerprint(terms: [String], baseURL: URL) -> String {
-        let source = ([baseURL.absoluteString, "weight=\(vocabularyWeight)"] + terms)
+    private static func vocabularyFingerprint(
+        terms: [String],
+        target: AliyunVocabularyTarget,
+        baseURL: URL
+    ) -> String {
+        let source = ([
+            baseURL.absoluteString,
+            "model=\(target.model)",
+            "weight=\(vocabularyWeight)"
+        ] + terms)
             .joined(separator: "\u{001F}")
         var hash: UInt64 = 14_695_981_039_346_656_037
         for byte in source.utf8 {
@@ -289,9 +399,8 @@ enum AliyunSpeechTranscriber {
 
     private static func uploadAudio(
         at audioURL: URL,
-        configuration: AliyunSpeechConfiguration
+        policy: UploadPolicy
     ) async throws -> String {
-        let policy = try await fetchUploadPolicy(configuration: configuration)
         let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
         let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         if let limit = policy.maxFileSizeMB,
@@ -343,7 +452,7 @@ enum AliyunSpeechTranscriber {
         )
         components?.queryItems = [
             URLQueryItem(name: "action", value: "getPolicy"),
-            URLQueryItem(name: "model", value: model)
+            URLQueryItem(name: "model", value: AliyunVocabularyTarget.file.model)
         ]
         guard let url = components?.url else {
             throw AliyunSpeechServiceError.invalidResponse("无法生成阿里云上传凭证地址。")
@@ -367,7 +476,7 @@ enum AliyunSpeechTranscriber {
             parameters["vocabulary_id"] = vocabularyID
         }
         let payload: [String: Any] = [
-            "model": model,
+            "model": AliyunVocabularyTarget.file.model,
             "input": ["file_urls": [audioURL]],
             "parameters": parameters
         ]
@@ -479,12 +588,6 @@ enum AliyunSpeechTranscriber {
             )
         }
     }
-}
-
-private struct VocabularySetup {
-    let id: String?
-    let acceptedTerms: [String]
-    let ignoredTerms: [String]
 }
 
 private struct MultipartFormData {

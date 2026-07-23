@@ -31,6 +31,23 @@ enum RecognitionPreferences {
     }
 }
 
+struct RecognitionBenchmarkResult: Codable, Equatable, Identifiable, Sendable {
+    let provider: SpeechRecognitionProvider
+    let mode: RecognitionHotwordMode
+    let completedAt: Date
+    let transcript: String
+    let elapsed: TimeInterval
+    let configuredHotwordCount: Int
+    let matchedTerms: [String]
+    let words: [SpeechRecognitionWord]
+    let fileMetrics: AliyunFileRecognitionMetrics?
+    let realtimeMetrics: AliyunRealtimeRecognitionMetrics?
+
+    var id: String {
+        "\(provider.rawValue)-\(mode.rawValue)"
+    }
+}
+
 struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let createdAt: Date
@@ -50,6 +67,9 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
     var withoutHotwordsProvider: SpeechRecognitionProvider?
     var withHotwordsWords: [SpeechRecognitionWord]?
     var withoutHotwordsWords: [SpeechRecognitionWord]?
+    var withHotwordsRealtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
+    var withoutHotwordsRealtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
+    var benchmarkResults: [RecognitionBenchmarkResult]? = nil
     var lastError: String?
     var lastErrorMode: RecognitionHotwordMode?
     var lastErrorProvider: SpeechRecognitionProvider?
@@ -66,6 +86,10 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
         case .withoutHotwords:
             return transcriptWithoutHotwords
         }
+    }
+
+    var availableBenchmarkResults: [RecognitionBenchmarkResult] {
+        benchmarkResults ?? []
     }
 
     func elapsed(for mode: RecognitionHotwordMode) -> TimeInterval? {
@@ -101,6 +125,17 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
             return withHotwordsWords ?? []
         case .withoutHotwords:
             return withoutHotwordsWords ?? []
+        }
+    }
+
+    func realtimeMetrics(
+        for mode: RecognitionHotwordMode
+    ) -> AliyunRealtimeRecognitionMetrics? {
+        switch mode {
+        case .withHotwords:
+            return withHotwordsRealtimeMetrics
+        case .withoutHotwords:
+            return withoutHotwordsRealtimeMetrics
         }
     }
 }
@@ -257,7 +292,9 @@ final class RecognitionHistoryStore: ObservableObject {
         configuredHotwordCount: Int,
         matchedTerms: [String],
         provider: SpeechRecognitionProvider,
-        words: [SpeechRecognitionWord]
+        words: [SpeechRecognitionWord],
+        fileMetrics: AliyunFileRecognitionMetrics? = nil,
+        realtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
     ) throws {
         guard let index = items.firstIndex(where: { $0.id == itemID }) else {
             throw RecognitionHistoryError.missingItem
@@ -271,13 +308,35 @@ final class RecognitionHistoryStore: ObservableObject {
             items[index].withHotwordsMatchedTerms = matchedTerms
             items[index].withHotwordsProvider = provider
             items[index].withHotwordsWords = words
+            items[index].withHotwordsRealtimeMetrics = realtimeMetrics
         case .withoutHotwords:
             items[index].transcriptWithoutHotwords = transcript
             items[index].withoutHotwordsElapsed = elapsed
             items[index].withoutHotwordsMatchedTerms = matchedTerms
             items[index].withoutHotwordsProvider = provider
             items[index].withoutHotwordsWords = words
+            items[index].withoutHotwordsRealtimeMetrics = realtimeMetrics
         }
+
+        var benchmarkResults = items[index].benchmarkResults ?? []
+        benchmarkResults.removeAll {
+            $0.provider == provider && $0.mode == mode
+        }
+        benchmarkResults.append(
+            RecognitionBenchmarkResult(
+                provider: provider,
+                mode: mode,
+                completedAt: Date(),
+                transcript: transcript,
+                elapsed: elapsed,
+                configuredHotwordCount: configuredHotwordCount,
+                matchedTerms: matchedTerms,
+                words: words,
+                fileMetrics: fileMetrics,
+                realtimeMetrics: realtimeMetrics
+            )
+        )
+        items[index].benchmarkResults = benchmarkResults
 
         items[index].lastError = nil
         items[index].lastErrorMode = nil
@@ -318,6 +377,14 @@ final class RecognitionHistoryStore: ObservableObject {
             items.remove(at: index)
         }
         try persist()
+    }
+
+    func delete(itemID: UUID) throws {
+        loadIfNeeded()
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+            return
+        }
+        try delete(at: IndexSet(integer: index))
     }
 
     func importPortableItems(
@@ -487,11 +554,39 @@ final class RecognitionHistoryStore: ObservableObject {
                 imported.withHotwordsWords ?? current.withHotwordsWords,
             withoutHotwordsWords:
                 imported.withoutHotwordsWords ?? current.withoutHotwordsWords,
+            withHotwordsRealtimeMetrics:
+                imported.withHotwordsRealtimeMetrics ?? current.withHotwordsRealtimeMetrics,
+            withoutHotwordsRealtimeMetrics:
+                imported.withoutHotwordsRealtimeMetrics
+                    ?? current.withoutHotwordsRealtimeMetrics,
+            benchmarkResults: mergeBenchmarkResults(
+                current.availableBenchmarkResults,
+                imported.availableBenchmarkResults
+            ),
             lastError: imported.lastError ?? current.lastError,
             lastErrorMode: imported.lastErrorMode ?? current.lastErrorMode,
             lastErrorProvider: imported.lastErrorProvider ?? current.lastErrorProvider,
             recordingAvailable: recording.hasRecording
         )
+    }
+
+    private func mergeBenchmarkResults(
+        _ current: [RecognitionBenchmarkResult],
+        _ imported: [RecognitionBenchmarkResult]
+    ) -> [RecognitionBenchmarkResult]? {
+        guard !current.isEmpty || !imported.isEmpty else {
+            return nil
+        }
+        var merged = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
+        for result in imported {
+            if let existing = merged[result.id], existing.completedAt > result.completedAt {
+                continue
+            }
+            merged[result.id] = result
+        }
+        return merged.values.sorted { lhs, rhs in
+            lhs.completedAt < rhs.completedAt
+        }
     }
 
     private func mergedRecordingItem(

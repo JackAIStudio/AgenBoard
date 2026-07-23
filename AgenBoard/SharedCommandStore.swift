@@ -8,7 +8,10 @@ struct SharedRecordingSnapshot {
     let audioLevel: Double
     let decibels: Double
     let duration: Double
+    let transcript: String
+    let transcriptIsFinal: Bool
     let status: String
+    let statusChangedAt: TimeInterval
     let updatedAt: TimeInterval
 }
 
@@ -16,11 +19,13 @@ struct SharedRecognitionResult {
     let id: String
     let text: String
     let createdAt: TimeInterval
+    let autoInsertRequestedAt: TimeInterval
 }
 
 enum SharedRecordingCommand: String {
     case start
     case stop
+    case cancel
 }
 
 enum SharedKeyboardHostKind: String {
@@ -51,6 +56,7 @@ enum SharedRecordingRequestPhase: String {
     case accepted
     case recording
     case stopped
+    case cancelled
     case failed
 }
 
@@ -172,12 +178,19 @@ enum SharedCommandStore {
     private static let recordingAudioLevelKey = "recordingAudioLevel"
     private static let recordingDecibelsKey = "recordingDecibels"
     private static let recordingDurationKey = "recordingDuration"
+    private static let recordingTranscriptKey = "recordingTranscript"
+    private static let recordingTranscriptIsFinalKey = "recordingTranscriptIsFinal"
     private static let recordingStatusKey = "recordingStatus"
+    private static let recordingStatusChangedAtKey = "recordingStatusChangedAt"
     private static let recordingUpdatedAtKey = "recordingUpdatedAt"
     private static let recognitionResultIDKey = "recognitionResultID"
     private static let recognitionResultTextKey = "recognitionResultText"
     private static let recognitionResultCreatedAtKey = "recognitionResultCreatedAt"
+    private static let recognitionResultAutoInsertRequestedAtKey =
+        "recognitionResultAutoInsertRequestedAt"
     private static let recognitionResultInsertedIDKey = "recognitionResultInsertedID"
+    private static let recognitionResultInsertionAttemptedAtKey =
+        "recognitionResultInsertionAttemptedAt"
     private static let keyboardAutoInsertRequestedAtKey = "keyboardAutoInsertRequestedAt"
     private static let keyboardAutoInsertPendingKey = "keyboardAutoInsertPending"
     private static let keyboardDiagnosticEventsKey = "keyboardDiagnosticEvents"
@@ -406,6 +419,7 @@ enum SharedCommandStore {
         defaults.set(event, forKey: "keyboardLastDiagnosticEvent")
         defaults.set(detail, forKey: "keyboardLastDiagnosticDetail")
         defaults.set(timestamp, forKey: "keyboardLastDiagnosticAt")
+        defaults.synchronize()
         RecordingLaunchMetrics.mark(event, detail: detail)
     }
 
@@ -499,8 +513,17 @@ enum SharedCommandStore {
         defaults.removeObject(forKey: recordingResponsePhaseKey)
         defaults.removeObject(forKey: recordingResponseMessageKey)
         defaults.removeObject(forKey: recordingResponseUpdatedAtKey)
-        defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
-        defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+        if command == .cancel {
+            defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+            defaults.removeObject(forKey: recognitionResultIDKey)
+            defaults.removeObject(forKey: recognitionResultTextKey)
+            defaults.removeObject(forKey: recognitionResultCreatedAtKey)
+            defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
+            defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
+        } else {
+            defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
+            defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+        }
         // synchronize() only asks CFPreferences to flush pending changes. Its
         // Boolean result is not a reliable availability check for an App Group:
         // the values can already be visible to the containing app even when the
@@ -752,19 +775,32 @@ enum SharedCommandStore {
         audioLevel: Double,
         decibels: Double,
         duration: Double,
+        transcript: String,
+        transcriptIsFinal: Bool,
         status: String
     ) {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return
         }
 
+        let updatedAt = Date().timeIntervalSince1970
+        if defaults.string(forKey: recordingStatusKey) != status {
+            defaults.set(updatedAt, forKey: recordingStatusChangedAtKey)
+        }
         defaults.set(isRecording, forKey: recordingIsActiveKey)
         defaults.set(isTranscribing, forKey: recordingIsTranscribingKey)
         defaults.set(max(0, min(1, audioLevel)), forKey: recordingAudioLevelKey)
         defaults.set(decibels, forKey: recordingDecibelsKey)
         defaults.set(duration, forKey: recordingDurationKey)
+        if defaults.string(forKey: recordingTranscriptKey) != transcript {
+            defaults.set(transcript, forKey: recordingTranscriptKey)
+        }
+        if defaults.object(forKey: recordingTranscriptIsFinalKey) == nil
+            || defaults.bool(forKey: recordingTranscriptIsFinalKey) != transcriptIsFinal {
+            defaults.set(transcriptIsFinal, forKey: recordingTranscriptIsFinalKey)
+        }
         defaults.set(status, forKey: recordingStatusKey)
-        defaults.set(Date().timeIntervalSince1970, forKey: recordingUpdatedAtKey)
+        defaults.set(updatedAt, forKey: recordingUpdatedAtKey)
         defaults.synchronize()
     }
 
@@ -786,11 +822,16 @@ enum SharedCommandStore {
                 audioLevel: 0,
                 decibels: -80,
                 duration: 0,
+                transcript: "",
+                transcriptIsFinal: false,
                 status: "等待完整访问权限",
+                statusChangedAt: 0,
                 updatedAt: 0
             )
         }
 
+        let updatedAt = defaults.double(forKey: recordingUpdatedAtKey)
+        let storedStatusChangedAt = defaults.double(forKey: recordingStatusChangedAtKey)
         return SharedRecordingSnapshot(
             isRecording: defaults.bool(forKey: recordingIsActiveKey),
             isTranscribing: defaults.bool(forKey: recordingIsTranscribingKey),
@@ -800,8 +841,11 @@ enum SharedCommandStore {
             audioLevel: defaults.double(forKey: recordingAudioLevelKey),
             decibels: defaults.object(forKey: recordingDecibelsKey) as? Double ?? -80,
             duration: defaults.double(forKey: recordingDurationKey),
+            transcript: defaults.string(forKey: recordingTranscriptKey) ?? "",
+            transcriptIsFinal: defaults.bool(forKey: recordingTranscriptIsFinalKey),
             status: defaults.string(forKey: recordingStatusKey) ?? "准备录音",
-            updatedAt: defaults.double(forKey: recordingUpdatedAtKey)
+            statusChangedAt: storedStatusChangedAt > 0 ? storedStatusChangedAt : updatedAt,
+            updatedAt: updatedAt
         )
     }
 
@@ -813,6 +857,8 @@ enum SharedCommandStore {
         defaults.removeObject(forKey: recognitionResultIDKey)
         defaults.removeObject(forKey: recognitionResultTextKey)
         defaults.removeObject(forKey: recognitionResultCreatedAtKey)
+        defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
+        defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
         defaults.synchronize()
     }
 
@@ -826,10 +872,26 @@ enum SharedCommandStore {
         }
 
         let id = UUID().uuidString
+        let autoInsertRequestedAt = defaults.bool(forKey: keyboardAutoInsertPendingKey)
+            ? defaults.double(forKey: keyboardAutoInsertRequestedAtKey)
+            : 0
         defaults.set(id, forKey: recognitionResultIDKey)
         defaults.set(trimmedText, forKey: recognitionResultTextKey)
         defaults.set(Date().timeIntervalSince1970, forKey: recognitionResultCreatedAtKey)
+        if autoInsertRequestedAt > 0 {
+            defaults.set(
+                autoInsertRequestedAt,
+                forKey: recognitionResultAutoInsertRequestedAtKey
+            )
+        } else {
+            defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
+        }
+        defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
         defaults.synchronize()
+        recordKeyboardDiagnostic(
+            "recognition_result_published",
+            detail: "id=\(id) chars=\(trimmedText.count) auto_insert=\(autoInsertRequestedAt > 0 ? 1 : 0)"
+        )
         return id
     }
 
@@ -844,7 +906,10 @@ enum SharedCommandStore {
         return SharedRecognitionResult(
             id: id,
             text: text,
-            createdAt: defaults.double(forKey: recognitionResultCreatedAtKey)
+            createdAt: defaults.double(forKey: recognitionResultCreatedAtKey),
+            autoInsertRequestedAt: defaults.double(
+                forKey: recognitionResultAutoInsertRequestedAtKey
+            )
         )
     }
 
@@ -853,14 +918,26 @@ enum SharedCommandStore {
             .string(forKey: recognitionResultInsertedIDKey)
     }
 
-    static func markRecognitionResultInserted(_ id: String) {
-        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+    static func latestRecognitionResultInsertionAttemptedAt() -> TimeInterval {
+        UserDefaults(suiteName: appGroupIdentifier)?
+            .double(forKey: recognitionResultInsertionAttemptedAtKey) ?? 0
+    }
+
+    static func markRecognitionResultInsertionAttempted(_ id: String) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+              defaults.string(forKey: recognitionResultIDKey) == id else {
             return
         }
 
+        let attemptedAt = Date().timeIntervalSince1970
         defaults.set(id, forKey: recognitionResultInsertedIDKey)
+        defaults.set(attemptedAt, forKey: recognitionResultInsertionAttemptedAtKey)
         defaults.set(false, forKey: keyboardAutoInsertPendingKey)
         defaults.synchronize()
+        recordKeyboardDiagnostic(
+            "recognition_insertion_attempt_recorded",
+            detail: "id=\(id)"
+        )
     }
 }
 

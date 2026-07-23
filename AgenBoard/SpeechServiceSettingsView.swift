@@ -74,7 +74,7 @@ struct SpeechServiceSettingsView: View {
                 }
             }
 
-            if provider == .aliyun {
+            if provider.usesAliyun {
                 Section {
                     HStack {
                         Group {
@@ -160,9 +160,15 @@ struct SpeechServiceSettingsView: View {
                 } header: {
                     Text("阿里云百炼")
                 } footer: {
-                    Text(
-                        "阿里云模式会把录音直传百炼托管的私有临时存储，再调用 fun-asr 整段识别；临时录音在 48 小时后由阿里云自动清理，无需另行开通 OSS。启用热词时会同步当前最多 100 个激活词。API Key 默认只保存在本机钥匙串，仅在你主动选择导出时才会进入数据包。"
-                    )
+                    if provider == .aliyunRealtime {
+                        Text(
+                            "实时版会在录音时通过 WebSocket 将 PCM 音频流直接发送到 fun-asr-realtime，停止后只等待最终句子收尾；本地仍保存一份录音用于回放和对照。启用热词时会同步当前最多 100 个激活词。API Key 默认只保存在本机钥匙串，仅在你主动选择导出时才会进入数据包。"
+                        )
+                    } else {
+                        Text(
+                            "文件版会把录音直传百炼托管的私有临时存储，再调用 fun-asr 整段识别；临时录音在 48 小时后由阿里云自动清理，无需另行开通 OSS。启用热词时会同步当前最多 100 个激活词。API Key 默认只保存在本机钥匙串，仅在你主动选择导出时才会进入数据包。"
+                        )
+                    }
                 }
             }
 
@@ -171,7 +177,7 @@ struct SpeechServiceSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if provider == .aliyun {
+                if provider.usesAliyun {
                     Text("录音、已启用热词和识别请求只会直接发送到阿里云，并受你与阿里云之间的服务条款约束；产生的调用费用计入你自己的百炼账号。删除本机 API Key 后，AgenBoard 将无法继续调用该服务。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
