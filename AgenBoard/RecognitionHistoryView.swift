@@ -193,17 +193,23 @@ struct RecognitionHistoryDetailView: View {
                             comparisonSection(summary)
                         }
 
-                        RecognitionResultSection(
-                            mode: .withHotwords,
-                            item: item
-                        )
+                        if item.availableBenchmarkResults.isEmpty {
+                            RecognitionResultSection(
+                                mode: .withHotwords,
+                                item: item
+                            )
 
-                        Divider()
+                            Divider()
 
-                        RecognitionResultSection(
-                            mode: .withoutHotwords,
-                            item: item
-                        )
+                            RecognitionResultSection(
+                                mode: .withoutHotwords,
+                                item: item
+                            )
+                        } else {
+                            RecognitionBenchmarkResultsSection(
+                                results: item.availableBenchmarkResults
+                            )
+                        }
                     }
                     .padding(20)
                 }
@@ -386,7 +392,7 @@ struct RecognitionHistoryDetailView: View {
         switch selectedProvider {
         case .apple:
             return supportsSpeechAnalyzer
-        case .aliyun:
+        case .aliyun, .aliyunRealtime:
             return AliyunCredentialStore.hasAPIKey
         }
     }
@@ -395,7 +401,7 @@ struct RecognitionHistoryDetailView: View {
         switch selectedProvider {
         case .apple:
             return "Apple 录音对照需要 iOS 26 的 DictationTranscriber。"
-        case .aliyun:
+        case .aliyun, .aliyunRealtime:
             return "请先在“识别服务”中保存阿里云百炼 API Key。"
         }
     }
@@ -477,7 +483,7 @@ struct RecognitionHistoryDetailView: View {
                     showsAlert = true
                     return
                 }
-            } else {
+            } else if provider == .aliyun {
                 for (index, mode) in modes.enumerated() {
                     let contextTerms = mode == .withHotwords ? activeHotwords : []
                     do {
@@ -505,6 +511,35 @@ struct RecognitionHistoryDetailView: View {
                         )
                     }
                 }
+            } else {
+                for (index, mode) in modes.enumerated() {
+                    let contextTerms = mode == .withHotwords ? activeHotwords : []
+                    do {
+                        let realtimeOutput = try await AliyunRealtimeSpeechTranscriber.transcribe(
+                            audioURL: store.audioURL(for: item),
+                            hotwords: contextTerms
+                        ) { progress in
+                            runningStatus =
+                                "\(progress) · \(mode.title) · \(index + 1)/\(modes.count)"
+                        }
+                        try save(
+                            output: realtimeOutput.serviceOutput,
+                            provider: provider,
+                            mode: mode,
+                            item: item,
+                            allHotwords: hotwords,
+                            realtimeMetrics: realtimeOutput.metrics
+                        )
+                    } catch {
+                        record(
+                            error: error,
+                            provider: provider,
+                            mode: mode,
+                            item: item,
+                            failures: &failures
+                        )
+                    }
+                }
             }
 
             if !failures.isEmpty {
@@ -519,7 +554,9 @@ struct RecognitionHistoryDetailView: View {
         provider: SpeechRecognitionProvider,
         mode: RecognitionHotwordMode,
         item: RecognitionHistoryItem,
-        allHotwords: [String]
+        allHotwords: [String],
+        fileMetrics: AliyunFileRecognitionMetrics? = nil,
+        realtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
     ) throws {
         let transcript = SpeechTranscriptNormalizer.normalize(output.transcript)
         let matchedTerms = HotwordTranscriptMatcher.matches(
@@ -535,7 +572,9 @@ struct RecognitionHistoryDetailView: View {
             configuredHotwordCount: output.configuredHotwordCount,
             matchedTerms: matchedTerms,
             provider: provider,
-            words: output.words
+            words: output.words,
+            fileMetrics: output.fileMetrics ?? fileMetrics,
+            realtimeMetrics: realtimeMetrics
         )
     }
 
@@ -557,6 +596,128 @@ struct RecognitionHistoryDetailView: View {
     }
 }
 
+private struct RecognitionBenchmarkResultsSection: View {
+    let results: [RecognitionBenchmarkResult]
+
+    private var sortedResults: [RecognitionBenchmarkResult] {
+        let providerOrder = Dictionary(
+            uniqueKeysWithValues: SpeechRecognitionProvider.allCases.enumerated().map {
+                ($0.element, $0.offset)
+            }
+        )
+        return results.sorted { lhs, rhs in
+            let lhsProvider = providerOrder[lhs.provider] ?? 0
+            let rhsProvider = providerOrder[rhs.provider] ?? 0
+            if lhsProvider != rhsProvider {
+                return lhsProvider < rhsProvider
+            }
+            return lhs.mode == .withHotwords && rhs.mode == .withoutHotwords
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("所有方案结果")
+                    .font(.headline)
+                Spacer()
+                Text("\(results.count) 组")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(Array(sortedResults.enumerated()), id: \.element.id) { index, result in
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 8) {
+                        Label(result.provider.shortTitle, systemImage: result.provider.systemImage)
+                            .font(.subheadline.weight(.semibold))
+                        Text(result.mode.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(
+                            result.provider == .aliyunRealtime
+                                ? String(format: "停止后 %.2fs", result.elapsed)
+                                : String(format: "总耗时 %.2fs", result.elapsed)
+                        )
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Text(result.transcript.isEmpty ? "未识别到文字" : result.transcript)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(11)
+                        .background(Color(uiColor: .secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .textSelection(.enabled)
+
+                    HStack(spacing: 12) {
+                        Label(
+                            "命中 \(result.matchedTerms.count) 个热词",
+                            systemImage: "text.magnifyingglass"
+                        )
+                        if result.mode == .withHotwords {
+                            Text("传入 \(result.configuredHotwordCount) 个")
+                        }
+                        if !result.words.isEmpty {
+                            Text("\(result.words.count) 个时间戳")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    if !result.matchedTerms.isEmpty {
+                        Text(result.matchedTerms.joined(separator: "、"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+
+                    if let metrics = result.fileMetrics {
+                        Text(
+                            String(
+                                format: "文件链路：热词 %.2fs · 临时凭证 %.2fs · 上传 %.2fs · 提交 %.2fs · 云端/轮询 %.2fs · 下载 %.2fs",
+                                metrics.vocabularyElapsed,
+                                metrics.uploadPolicyElapsed,
+                                metrics.uploadTransferElapsed,
+                                metrics.taskSubmissionElapsed,
+                                metrics.cloudProcessingElapsed,
+                                metrics.resultDownloadElapsed
+                            )
+                        )
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+
+                    if let metrics = result.realtimeMetrics {
+                        let firstResult = metrics.firstResultElapsed.map {
+                            String(format: "%.2fs", $0)
+                        } ?? "—"
+                        let billedDuration = metrics.billedDurationSeconds.map {
+                            "\($0)s"
+                        } ?? "—"
+                        Text(
+                            String(
+                                format: "连接 %.2fs · 首字 %@ · 停止后 %.2fs · 计费 %@",
+                                metrics.connectionElapsed,
+                                firstResult,
+                                metrics.finalizationElapsed,
+                                billedDuration
+                            )
+                        )
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                if index < sortedResults.count - 1 {
+                    Divider()
+                }
+            }
+        }
+    }
+}
+
 private struct RecognitionResultSection: View {
     let mode: RecognitionHotwordMode
     let item: RecognitionHistoryItem
@@ -571,6 +732,10 @@ private struct RecognitionResultSection: View {
 
     private var words: [SpeechRecognitionWord] {
         item.words(for: mode)
+    }
+
+    private var realtimeMetrics: AliyunRealtimeRecognitionMetrics? {
+        item.realtimeMetrics(for: mode)
     }
 
     var body: some View {
@@ -631,6 +796,26 @@ private struct RecognitionResultSection: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+
+                if let realtimeMetrics {
+                    let firstResult = realtimeMetrics.firstResultElapsed.map {
+                        String(format: "%.2fs", $0)
+                    } ?? "—"
+                    let billedDuration = realtimeMetrics.billedDurationSeconds.map {
+                        "\($0)s"
+                    } ?? "—"
+                    Text(
+                        String(
+                            format: "实时指标：连接 %.2fs · 首字 %@ · 停止后 %.2fs · 计费 %@",
+                            realtimeMetrics.connectionElapsed,
+                            firstResult,
+                            realtimeMetrics.finalizationElapsed,
+                            billedDuration
+                        )
+                    )
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
                 }
             } else {
                 Text("尚未运行")

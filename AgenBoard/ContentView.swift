@@ -256,7 +256,7 @@ struct ContentView: View {
                                     .font(.headline)
 
                                 Text(
-                                    selectedProvider == .aliyun && !aliyunConfigured
+                                    selectedProvider.usesAliyun && !aliyunConfigured
                                         ? "阿里云 Fun-ASR · 需要配置 API Key"
                                         : selectedProvider.title
                                 )
@@ -820,6 +820,8 @@ struct ContentView: View {
                 recorder.startRecordingIfNeeded()
             case .stop:
                 recorder.stopRecordingAndTranscribeIfNeeded()
+            case .cancel:
+                recorder.cancelCurrentRecognition()
             }
         }
     }
@@ -1056,11 +1058,13 @@ struct ContentView: View {
             phase: .accepted
         )
 
-        keepsPictureInPictureAlive = true
-        if request.requiresForegroundRoundTrip {
-            pip.prepareForAutomaticStart()
-        } else if !pip.isPictureInPictureActive {
-            pip.start()
+        if request.command != .cancel {
+            keepsPictureInPictureAlive = true
+            if request.requiresForegroundRoundTrip {
+                pip.prepareForAutomaticStart()
+            } else if !pip.isPictureInPictureActive {
+                pip.start()
+            }
         }
 
         switch request.command {
@@ -1090,6 +1094,13 @@ struct ContentView: View {
             SharedCommandStore.updateRecordingRequestResponse(
                 for: request,
                 phase: .stopped
+            )
+        case .cancel:
+            queuedRecordingStartRequest = nil
+            recorder.cancelCurrentRecognition()
+            SharedCommandStore.updateRecordingRequestResponse(
+                for: request,
+                phase: .cancelled
             )
         }
         scheduleAutomaticReturnIfReady()

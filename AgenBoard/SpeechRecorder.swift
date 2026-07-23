@@ -20,6 +20,10 @@ final class SpeechRecorder: ObservableObject {
     private let historyStore: RecognitionHistoryStore
     private lazy var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
     private var recorder: AVAudioRecorder?
+    private var realtimeCapture: AliyunRealtimeAudioCapture?
+    private var realtimeSession: AliyunRealtimeSpeechSession?
+    private var realtimeAudioSendingTask: Task<Void, Error>?
+    private var realtimeTranscriptIsFinal = false
     private var player: AVAudioPlayer?
     private var recordingURL: URL?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -156,6 +160,12 @@ final class SpeechRecorder: ObservableObject {
         if isRecording {
             recorder?.stop()
             recorder = nil
+            realtimeCapture?.stop()
+            realtimeCapture = nil
+            realtimeAudioSendingTask?.cancel()
+            realtimeAudioSendingTask = nil
+            realtimeSession?.cancel()
+            realtimeSession = nil
             isRecording = false
             deactivateAudioSession()
         }
@@ -166,8 +176,15 @@ final class SpeechRecorder: ObservableObject {
         recognitionTask = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
+        realtimeAudioSendingTask?.cancel()
+        realtimeAudioSendingTask = nil
+        realtimeSession?.cancel()
+        realtimeSession = nil
+        realtimeCapture?.stop()
+        realtimeCapture = nil
         isTranscribing = false
         transcript = ""
+        realtimeTranscriptIsFinal = false
         SharedCommandStore.clearRecognitionResult()
         SharedCommandStore.cancelKeyboardAutoInsert()
         audioLevel = 0
@@ -177,6 +194,62 @@ final class SpeechRecorder: ObservableObject {
         recordingDuration = 0
         lastRecordingFileSize = 0
         status = "准备录音"
+        publishRecordingSnapshot(status: status)
+    }
+
+    func cancelCurrentRecognition() {
+        guard isRecording || isTranscribing else {
+            return
+        }
+
+        let cancelledRecordingURL = recordingURL
+        let cancelledHistoryItemID = currentHistoryItemID
+
+        recorder?.stop()
+        recorder = nil
+        realtimeCapture?.stop()
+        realtimeCapture = nil
+        realtimeAudioSendingTask?.cancel()
+        realtimeAudioSendingTask = nil
+        realtimeSession?.cancel()
+        realtimeSession = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        stopMetering()
+        stopPlayback()
+        isRecording = false
+        isTranscribing = false
+        deactivateAudioSession()
+
+        var cleanupFailure: Error?
+        do {
+            if let cancelledHistoryItemID {
+                try historyStore.delete(itemID: cancelledHistoryItemID)
+            } else if let cancelledRecordingURL,
+                      FileManager.default.fileExists(atPath: cancelledRecordingURL.path) {
+                try FileManager.default.removeItem(at: cancelledRecordingURL)
+            }
+        } catch {
+            cleanupFailure = error
+        }
+
+        recordingURL = nil
+        currentHistoryItemID = nil
+        transcript = ""
+        realtimeTranscriptIsFinal = false
+        SharedCommandStore.clearRecognitionResult()
+        SharedCommandStore.cancelKeyboardAutoInsert()
+        audioLevel = 0
+        smoothedAudioLevel = 0
+        peakAudioLevel = 0
+        currentDecibels = -80
+        recordingDuration = 0
+        lastRecordingFileSize = 0
+        status = cleanupFailure == nil
+            ? "已取消本次识别"
+            : "识别已取消，但录音清理失败"
         publishRecordingSnapshot(status: status)
     }
 
@@ -199,7 +272,7 @@ final class SpeechRecorder: ObservableObject {
             // a stale insertion request left by an earlier keyboard session.
             SharedCommandStore.cancelKeyboardAutoInsert()
         }
-        if currentProvider == .aliyun {
+        if currentProvider.usesAliyun {
             do {
                 _ = try AliyunSpeechConfiguration.load()
             } catch {
@@ -227,6 +300,7 @@ final class SpeechRecorder: ObservableObject {
             "main_recording_permissions_ready",
             request: request
         )
+        prepareRecognitionContext()
 
         recognitionTask?.cancel()
         recognitionTask = nil
@@ -234,6 +308,7 @@ final class SpeechRecorder: ObservableObject {
         transcriptionTask = nil
         currentHistoryItemID = nil
         transcript = ""
+        realtimeTranscriptIsFinal = false
         SharedCommandStore.clearRecognitionResult()
         lastRecordingFileSize = 0
         recordingDuration = 0
@@ -259,33 +334,39 @@ final class SpeechRecorder: ObservableObject {
                 .appendingPathComponent("agenboard-\(UUID().uuidString)")
                 .appendingPathExtension("m4a")
 
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 16_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-            ]
+            if currentProvider == .aliyunRealtime {
+                try startAliyunRealtimeCapture(at: url)
+            } else {
+                let settings: [String: Any] = [
+                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                    AVSampleRateKey: 16_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+                ]
 
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.isMeteringEnabled = true
-            recorder.prepareToRecord()
+                let recorder = try AVAudioRecorder(url: url, settings: settings)
+                recorder.isMeteringEnabled = true
+                recorder.prepareToRecord()
 
-            guard recorder.record() else {
-                SharedCommandStore.cancelKeyboardAutoInsert()
-                deactivateAudioSession()
-                publishRequestResponse(
-                    for: request,
-                    phase: .failed,
-                    message: "录音启动失败"
-                )
-                showError("录音启动失败。")
-                return
+                guard recorder.record() else {
+                    SharedCommandStore.cancelKeyboardAutoInsert()
+                    deactivateAudioSession()
+                    publishRequestResponse(
+                        for: request,
+                        phase: .failed,
+                        message: "录音启动失败"
+                    )
+                    showError("录音启动失败。")
+                    return
+                }
+                self.recorder = recorder
             }
 
-            self.recorder = recorder
             recordingURL = url
             isRecording = true
-            status = "正在录音"
+            status = currentProvider == .aliyunRealtime
+                ? "正在录音 · 正在连接阿里实时"
+                : "正在录音"
             publishRecordingSnapshot(status: status)
             startMetering()
             RecordingLaunchMetrics.mark(
@@ -294,6 +375,12 @@ final class SpeechRecorder: ObservableObject {
             )
             publishRequestResponse(for: request, phase: .recording)
         } catch {
+            realtimeAudioSendingTask?.cancel()
+            realtimeAudioSendingTask = nil
+            realtimeCapture?.stop()
+            realtimeCapture = nil
+            realtimeSession?.cancel()
+            realtimeSession = nil
             let nsError = error as NSError
             status = "录音启动失败"
             RecordingLaunchMetrics.mark(
@@ -306,6 +393,89 @@ final class SpeechRecorder: ObservableObject {
             let message = "无法开始录音：\(error.localizedDescription)"
             publishRequestResponse(for: request, phase: .failed, message: message)
             showError(message)
+        }
+    }
+
+    private func prepareRecognitionContext() {
+        currentRecognitionMode = RecognitionPreferences.usesHotwords
+            ? .withHotwords
+            : .withoutHotwords
+        let libraryEntries = HotwordLibraryStorage.loadEntries()
+        currentLibraryHotwords = libraryEntries.map(\.term)
+        currentActiveHotwords = currentRecognitionMode == .withHotwords
+            ? HotwordSelectionPolicy.selectedTerms(from: libraryEntries)
+            : []
+        currentConfiguredHotwordCount = currentActiveHotwords.count
+    }
+
+    private func startAliyunRealtimeCapture(at url: URL) throws {
+        // 先启动麦克风。热词同步和 WebSocket 建连期间产生的 PCM 会留在
+        // AsyncStream 中，连接就绪后按原顺序补发，避免点击后的开头语音丢失。
+        // 600 个音频块可覆盖远高于 15 秒连接超时的音频，同时限制异常网络下的内存。
+        let (audioStream, continuation) = AsyncStream<Data>.makeStream(
+            bufferingPolicy: .bufferingOldest(600)
+        )
+        let capture = try AliyunRealtimeAudioCapture(
+            fileURL: url,
+            audioContinuation: continuation
+        ) { [weak self] decibels, duration in
+            self?.updateRealtimeMeter(decibels: decibels, duration: duration)
+        }
+        realtimeCapture = capture
+        do {
+            try capture.start()
+        } catch {
+            realtimeCapture = nil
+            continuation.finish()
+            throw error
+        }
+
+        realtimeAudioSendingTask = Task { @MainActor [weak self] in
+            guard let self else {
+                throw CancellationError()
+            }
+
+            do {
+                self.status = "正在录音 · 正在同步阿里实时热词"
+                self.publishRecordingSnapshot(status: self.status)
+                let vocabulary = try await AliyunSpeechTranscriber.prepareVocabulary(
+                    hotwords: self.currentActiveHotwords,
+                    target: .realtime
+                )
+                self.currentConfiguredHotwordCount = vocabulary.acceptedTerms.count
+
+                let session = AliyunRealtimeSpeechSession(
+                    configuration: try AliyunSpeechConfiguration.load(),
+                    vocabulary: vocabulary
+                ) { [weak self] text, isFinal in
+                    guard let self, self.isRecording || self.isTranscribing else {
+                        return
+                    }
+                    self.transcript = SpeechTranscriptNormalizer.normalize(text)
+                    self.realtimeTranscriptIsFinal = isFinal
+                    self.status = isFinal
+                        ? "正在录音 · 阿里实时已生成句子"
+                        : "正在录音 · 阿里实时转写中"
+                    self.publishRecordingSnapshot(status: self.status)
+                }
+                self.realtimeSession = session
+                self.status = "正在录音 · 正在建立阿里实时连接"
+                self.publishRecordingSnapshot(status: self.status)
+                try await session.connect()
+                self.status = "正在录音 · 阿里实时已连接"
+                self.publishRecordingSnapshot(status: self.status)
+
+                for await data in audioStream {
+                    try Task.checkCancellation()
+                    try await session.sendAudio(data)
+                }
+            } catch {
+                if !Task.isCancelled, self.isRecording {
+                    self.status = "正在录音 · 阿里实时连接异常"
+                    self.publishRecordingSnapshot(status: self.status)
+                }
+                throw error
+            }
         }
     }
 
@@ -336,15 +506,18 @@ final class SpeechRecorder: ObservableObject {
     }
 
     private func stopRecordingAndTranscribe() {
-        recorder?.stop()
+        if currentProvider == .aliyunRealtime {
+            realtimeCapture?.stop()
+            realtimeCapture = nil
+        } else {
+            recorder?.stop()
+        }
         updateLastRecordingStats()
         stopMetering()
         recorder = nil
         isRecording = false
+        isTranscribing = true
         deactivateAudioSession()
-        currentRecognitionMode = RecognitionPreferences.usesHotwords
-            ? .withHotwords
-            : .withoutHotwords
 
         if let recordingURL {
             do {
@@ -362,13 +535,22 @@ final class SpeechRecorder: ObservableObject {
             }
         }
 
-        status = "录音已停止，正在识别"
+        status = currentProvider == .aliyunRealtime
+            ? "录音已停止，正在等待实时识别收尾"
+            : "录音已停止，正在识别"
         publishRecordingSnapshot(isTranscribing: true, status: status)
 
         transcriptionTask?.cancel()
         transcriptionTask = Task { [weak self] in
-            await self?.transcribeLatestRecording()
-            self?.transcriptionTask = nil
+            guard let self else {
+                return
+            }
+            if self.currentProvider == .aliyunRealtime {
+                await self.finishAliyunRealtimeTranscription()
+            } else {
+                await self.transcribeLatestRecording()
+            }
+            self.transcriptionTask = nil
         }
     }
 
@@ -422,6 +604,10 @@ final class SpeechRecorder: ObservableObject {
         switch currentProvider {
         case .aliyun:
             await transcribeWithAliyun(audioURL: recordingURL)
+        case .aliyunRealtime:
+            // 实时模式在录音期间已经完成推流，停止录音时由
+            // finishAliyunRealtimeTranscription() 单独收尾。
+            return
         case .apple:
             if #available(iOS 26.0, *) {
                 await transcribeWithSpeechAnalyzer(audioURL: recordingURL)
@@ -443,6 +629,7 @@ final class SpeechRecorder: ObservableObject {
                 self.status = progress
                 self.publishRecordingSnapshot(isTranscribing: true, status: progress)
             }
+            try Task.checkCancellation()
             currentConfiguredHotwordCount = output.configuredHotwordCount
             let ignoredSuffix = output.ignoredHotwords.isEmpty
                 ? ""
@@ -452,6 +639,7 @@ final class SpeechRecorder: ObservableObject {
                 elapsed: output.elapsed,
                 provider: .aliyun,
                 words: output.words,
+                fileMetrics: output.fileMetrics,
                 completionNote: ignoredSuffix
             )
         } catch is CancellationError {
@@ -461,6 +649,70 @@ final class SpeechRecorder: ObservableObject {
             failTranscription("阿里云识别意外中断，请重新录音后再试。")
         } catch {
             failTranscription("阿里云识别失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func finishAliyunRealtimeTranscription() async {
+        isTranscribing = true
+        defer {
+            realtimeAudioSendingTask?.cancel()
+            realtimeAudioSendingTask = nil
+            realtimeSession = nil
+            realtimeCapture = nil
+        }
+
+        do {
+            if let realtimeAudioSendingTask {
+                try await realtimeAudioSendingTask.value
+            }
+            try Task.checkCancellation()
+            guard let session = realtimeSession else {
+                throw AliyunSpeechServiceError.taskFailed(
+                    "阿里云实时识别会话不存在，请重新录音后再试。"
+                )
+            }
+            status = "录音已停止，正在请求阿里实时最终结果"
+            publishRecordingSnapshot(isTranscribing: true, status: status)
+
+            let output = try await session.finish()
+            try Task.checkCancellation()
+            realtimeTranscriptIsFinal = true
+            currentConfiguredHotwordCount = output.serviceOutput.configuredHotwordCount
+            var notes = [
+                String(
+                    format: "停止后等待 %.2fs · 连接 %.2fs",
+                    output.metrics.finalizationElapsed,
+                    output.metrics.connectionElapsed
+                )
+            ]
+            if let firstResultElapsed = output.metrics.firstResultElapsed {
+                notes.append(String(format: "首字 %.2fs", firstResultElapsed))
+            }
+            if let billedDurationSeconds = output.metrics.billedDurationSeconds {
+                notes.append("云端计费 \(billedDurationSeconds)s")
+            }
+            if !output.serviceOutput.ignoredHotwords.isEmpty {
+                notes.append(
+                    "另有 \(output.serviceOutput.ignoredHotwords.count) 个词不符合阿里热词格式限制"
+                )
+            }
+            completeTranscription(
+                output.serviceOutput.transcript,
+                elapsed: output.metrics.finalizationElapsed,
+                provider: .aliyunRealtime,
+                words: output.serviceOutput.words,
+                realtimeMetrics: output.metrics,
+                completionNote: "；" + notes.joined(separator: " · ")
+            )
+        } catch is CancellationError {
+            realtimeSession?.cancel()
+            guard !Task.isCancelled else {
+                return
+            }
+            failTranscription("阿里云实时识别意外中断，请重新录音后再试。")
+        } catch {
+            realtimeSession?.cancel()
+            failTranscription("阿里云实时识别失败：\(error.localizedDescription)")
         }
     }
 
@@ -485,6 +737,7 @@ final class SpeechRecorder: ObservableObject {
                 locale: locale,
                 hotwords: currentActiveHotwords
             )
+            try Task.checkCancellation()
             completeTranscription(
                 output.transcript,
                 elapsed: output.elapsed,
@@ -523,7 +776,7 @@ final class SpeechRecorder: ObservableObject {
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor in
-                guard let self else {
+                guard let self, self.isTranscribing else {
                     return
                 }
 
@@ -560,9 +813,12 @@ final class SpeechRecorder: ObservableObject {
         elapsed: TimeInterval,
         provider: SpeechRecognitionProvider,
         words: [SpeechRecognitionWord],
+        fileMetrics: AliyunFileRecognitionMetrics? = nil,
+        realtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil,
         completionNote: String = ""
     ) {
         transcript = SpeechTranscriptNormalizer.normalize(text)
+        realtimeTranscriptIsFinal = true
         isTranscribing = false
         let matchedTerms = HotwordTranscriptMatcher.matches(
             in: transcript,
@@ -580,7 +836,9 @@ final class SpeechRecorder: ObservableObject {
                     configuredHotwordCount: currentConfiguredHotwordCount,
                     matchedTerms: matchedTerms,
                     provider: provider,
-                    words: words
+                    words: words,
+                    fileMetrics: fileMetrics,
+                    realtimeMetrics: realtimeMetrics
                 )
             } catch {
                 showError("识别已完成，但历史转写保存失败：\(error.localizedDescription)")
@@ -687,6 +945,20 @@ final class SpeechRecorder: ObservableObject {
         publishRecordingSnapshot(status: status)
     }
 
+    private func updateRealtimeMeter(decibels: Double, duration: TimeInterval) {
+        guard isRecording || isStartingRecording else {
+            return
+        }
+        recordingDuration = duration
+        currentDecibels = decibels
+        let linearLevel = max(0, min(1, (decibels + 55) / 45))
+        let perceptualLevel = pow(linearLevel, 0.68)
+        smoothedAudioLevel = smoothedAudioLevel * 0.32 + perceptualLevel * 0.68
+        audioLevel = smoothedAudioLevel
+        peakAudioLevel = max(peakAudioLevel, smoothedAudioLevel)
+        publishRecordingSnapshot(status: status)
+    }
+
     private func publishRecordingSnapshot(isTranscribing: Bool? = nil, status: String) {
         SharedCommandStore.updateRecordingSnapshot(
             isRecording: isRecording,
@@ -694,6 +966,8 @@ final class SpeechRecorder: ObservableObject {
             audioLevel: audioLevel,
             decibels: currentDecibels,
             duration: recordingDuration,
+            transcript: transcript,
+            transcriptIsFinal: realtimeTranscriptIsFinal,
             status: status
         )
     }

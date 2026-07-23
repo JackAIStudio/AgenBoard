@@ -660,6 +660,7 @@ private struct PortableRecognitionRecord: Codable, Sendable {
     let originalRequest: PortableOriginalRecognitionRequest?
     let withHotwords: PortableRecognitionResult?
     let withoutHotwords: PortableRecognitionResult?
+    let benchmarkResults: [RecognitionBenchmarkResult]?
     let lastError: PortableRecognitionError?
 
     init(_ item: RecognitionHistoryItem, includeRecording: Bool) {
@@ -685,7 +686,8 @@ private struct PortableRecognitionRecord: Codable, Sendable {
             configuredHotwordCount: item.withHotwordsConfiguredCount,
             matchedTerms: item.withHotwordsMatchedTerms,
             provider: item.withHotwordsProvider,
-            words: item.withHotwordsWords
+            words: item.withHotwordsWords,
+            realtimeMetrics: item.withHotwordsRealtimeMetrics
         )
         withoutHotwords = PortableRecognitionResult.make(
             transcript: item.transcriptWithoutHotwords,
@@ -693,8 +695,10 @@ private struct PortableRecognitionRecord: Codable, Sendable {
             configuredHotwordCount: nil,
             matchedTerms: item.withoutHotwordsMatchedTerms,
             provider: item.withoutHotwordsProvider,
-            words: item.withoutHotwordsWords
+            words: item.withoutHotwordsWords,
+            realtimeMetrics: item.withoutHotwordsRealtimeMetrics
         )
+        benchmarkResults = item.benchmarkResults
         if let message = item.lastError {
             lastError = PortableRecognitionError(
                 message: message,
@@ -726,6 +730,9 @@ private struct PortableRecognitionRecord: Codable, Sendable {
             withoutHotwordsProvider: withoutHotwords?.provider,
             withHotwordsWords: withHotwords?.words,
             withoutHotwordsWords: withoutHotwords?.words,
+            withHotwordsRealtimeMetrics: withHotwords?.realtimeMetrics,
+            withoutHotwordsRealtimeMetrics: withoutHotwords?.realtimeMetrics,
+            benchmarkResults: benchmarkResults,
             lastError: lastError?.message,
             lastErrorMode: lastError?.mode,
             lastErrorProvider: lastError?.provider,
@@ -757,6 +764,7 @@ private struct PortableRecognitionResult: Codable, Sendable {
     let matchedTerms: [String]?
     let provider: SpeechRecognitionProvider?
     let words: [SpeechRecognitionWord]?
+    let realtimeMetrics: AliyunRealtimeRecognitionMetrics?
 
     static func make(
         transcript: String?,
@@ -764,14 +772,16 @@ private struct PortableRecognitionResult: Codable, Sendable {
         configuredHotwordCount: Int?,
         matchedTerms: [String]?,
         provider: SpeechRecognitionProvider?,
-        words: [SpeechRecognitionWord]?
+        words: [SpeechRecognitionWord]?,
+        realtimeMetrics: AliyunRealtimeRecognitionMetrics?
     ) -> PortableRecognitionResult? {
         guard transcript != nil
                 || elapsedSeconds != nil
                 || configuredHotwordCount != nil
                 || matchedTerms != nil
                 || provider != nil
-                || words != nil else {
+                || words != nil
+                || realtimeMetrics != nil else {
             return nil
         }
         return PortableRecognitionResult(
@@ -780,7 +790,8 @@ private struct PortableRecognitionResult: Codable, Sendable {
             configuredHotwordCount: configuredHotwordCount,
             matchedTerms: matchedTerms,
             provider: provider,
-            words: words
+            words: words,
+            realtimeMetrics: realtimeMetrics
         )
     }
 }

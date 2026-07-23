@@ -8,6 +8,8 @@ struct SharedRecordingSnapshot {
     let audioLevel: Double
     let decibels: Double
     let duration: Double
+    let transcript: String
+    let transcriptIsFinal: Bool
     let status: String
     let statusChangedAt: TimeInterval
     let updatedAt: TimeInterval
@@ -23,6 +25,7 @@ struct SharedRecognitionResult {
 enum SharedRecordingCommand: String {
     case start
     case stop
+    case cancel
 }
 
 enum SharedKeyboardHostKind: String {
@@ -53,6 +56,7 @@ enum SharedRecordingRequestPhase: String {
     case accepted
     case recording
     case stopped
+    case cancelled
     case failed
 }
 
@@ -174,6 +178,8 @@ enum SharedCommandStore {
     private static let recordingAudioLevelKey = "recordingAudioLevel"
     private static let recordingDecibelsKey = "recordingDecibels"
     private static let recordingDurationKey = "recordingDuration"
+    private static let recordingTranscriptKey = "recordingTranscript"
+    private static let recordingTranscriptIsFinalKey = "recordingTranscriptIsFinal"
     private static let recordingStatusKey = "recordingStatus"
     private static let recordingStatusChangedAtKey = "recordingStatusChangedAt"
     private static let recordingUpdatedAtKey = "recordingUpdatedAt"
@@ -507,8 +513,17 @@ enum SharedCommandStore {
         defaults.removeObject(forKey: recordingResponsePhaseKey)
         defaults.removeObject(forKey: recordingResponseMessageKey)
         defaults.removeObject(forKey: recordingResponseUpdatedAtKey)
-        defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
-        defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+        if command == .cancel {
+            defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+            defaults.removeObject(forKey: recognitionResultIDKey)
+            defaults.removeObject(forKey: recognitionResultTextKey)
+            defaults.removeObject(forKey: recognitionResultCreatedAtKey)
+            defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
+            defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
+        } else {
+            defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
+            defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+        }
         // synchronize() only asks CFPreferences to flush pending changes. Its
         // Boolean result is not a reliable availability check for an App Group:
         // the values can already be visible to the containing app even when the
@@ -760,6 +775,8 @@ enum SharedCommandStore {
         audioLevel: Double,
         decibels: Double,
         duration: Double,
+        transcript: String,
+        transcriptIsFinal: Bool,
         status: String
     ) {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
@@ -775,6 +792,13 @@ enum SharedCommandStore {
         defaults.set(max(0, min(1, audioLevel)), forKey: recordingAudioLevelKey)
         defaults.set(decibels, forKey: recordingDecibelsKey)
         defaults.set(duration, forKey: recordingDurationKey)
+        if defaults.string(forKey: recordingTranscriptKey) != transcript {
+            defaults.set(transcript, forKey: recordingTranscriptKey)
+        }
+        if defaults.object(forKey: recordingTranscriptIsFinalKey) == nil
+            || defaults.bool(forKey: recordingTranscriptIsFinalKey) != transcriptIsFinal {
+            defaults.set(transcriptIsFinal, forKey: recordingTranscriptIsFinalKey)
+        }
         defaults.set(status, forKey: recordingStatusKey)
         defaults.set(updatedAt, forKey: recordingUpdatedAtKey)
         defaults.synchronize()
@@ -798,6 +822,8 @@ enum SharedCommandStore {
                 audioLevel: 0,
                 decibels: -80,
                 duration: 0,
+                transcript: "",
+                transcriptIsFinal: false,
                 status: "等待完整访问权限",
                 statusChangedAt: 0,
                 updatedAt: 0
@@ -815,6 +841,8 @@ enum SharedCommandStore {
             audioLevel: defaults.double(forKey: recordingAudioLevelKey),
             decibels: defaults.object(forKey: recordingDecibelsKey) as? Double ?? -80,
             duration: defaults.double(forKey: recordingDurationKey),
+            transcript: defaults.string(forKey: recordingTranscriptKey) ?? "",
+            transcriptIsFinal: defaults.bool(forKey: recordingTranscriptIsFinalKey),
             status: defaults.string(forKey: recordingStatusKey) ?? "准备录音",
             statusChangedAt: storedStatusChangedAt > 0 ? storedStatusChangedAt : updatedAt,
             updatedAt: updatedAt
