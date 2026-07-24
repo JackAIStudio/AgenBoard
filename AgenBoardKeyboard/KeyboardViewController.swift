@@ -119,7 +119,10 @@ final class KeyboardViewController: UIInputViewController,
     private let cursorTrackingFeedbackGenerator = UIImpactFeedbackGenerator(style: .light)
     private let keyFeedbackGenerator = UIImpactFeedbackGenerator(style: .light)
     private let selectionFeedbackGenerator = UISelectionFeedbackGenerator()
+    private let voiceReadyFeedbackGenerator = UINotificationFeedbackGenerator()
     private var hapticsEnabled = true
+    private var wasPreparingVoiceInput = false
+    private var wasRecordingVoiceInput = false
     private var lastHandledRecognitionResultID: String?
     private var lastInsertionDiagnosticState: String?
     private var retryableRecognitionResultID: String?
@@ -1747,11 +1750,17 @@ final class KeyboardViewController: UIInputViewController,
         let now = Date().timeIntervalSince1970
         let snapshotAge = now - snapshot.updatedAt
         let isAppResponsive = snapshotAge >= -0.5 && snapshotAge < 1.5
+        if isAppResponsive, snapshot.isPreparing {
+            statusLabel.text = "正在准备语音输入，请稍候"
+            statusLabel.textColor = .secondaryLabel
+            return
+        }
         let canUseBackgroundCommand = isAppResponsive
             && (snapshot.isRecording || snapshot.isBackgroundStartReady)
         let diagnosticState = String(
-            format: "age=%.3f recording=%d transcribing=%d background_ready=%d",
+            format: "age=%.3f preparing=%d recording=%d transcribing=%d background_ready=%d",
             snapshotAge,
+            snapshot.isPreparing ? 1 : 0,
             snapshot.isRecording ? 1 : 0,
             snapshot.isTranscribing ? 1 : 0,
             snapshot.isBackgroundStartReady ? 1 : 0
@@ -1846,7 +1855,9 @@ final class KeyboardViewController: UIInputViewController,
         let snapshotAge = now - snapshot.updatedAt
         guard snapshotAge >= -0.5,
               snapshotAge < 1.5,
-              snapshot.isRecording || snapshot.isTranscribing else {
+              snapshot.isPreparing
+                || snapshot.isRecording
+                || snapshot.isTranscribing else {
             showLaunchFailure("当前没有可取消的识别任务")
             return
         }
@@ -1863,7 +1874,7 @@ final class KeyboardViewController: UIInputViewController,
 
         SharedCommandStore.recordKeyboardDiagnostic(
             "recognition_cancel_requested",
-            detail: "id=\(request.id) recording=\(snapshot.isRecording ? 1 : 0) transcribing=\(snapshot.isTranscribing ? 1 : 0)"
+            detail: "id=\(request.id) preparing=\(snapshot.isPreparing ? 1 : 0) recording=\(snapshot.isRecording ? 1 : 0) transcribing=\(snapshot.isTranscribing ? 1 : 0)"
         )
         statusLabel.text = "正在取消本次识别..."
         statusLabel.textColor = .secondaryLabel
@@ -2151,6 +2162,7 @@ final class KeyboardViewController: UIInputViewController,
         let now = Date().timeIntervalSince1970
         let snapshotAge = now - snapshot.updatedAt
         let isFresh = snapshotAge >= -0.5 && snapshotAge < 1.5
+        let isPreparing = isFresh && snapshot.isPreparing
         let isActive = isFresh && snapshot.isRecording
         let isTranscribing = isFresh && snapshot.isTranscribing
         let shouldKeepInsertionMessage = now < insertionMessageUntil
@@ -2176,14 +2188,29 @@ final class KeyboardViewController: UIInputViewController,
             appLaunchRequestedAt = nil
         }
 
+        if isPreparing {
+            voiceReadyFeedbackGenerator.prepare()
+        }
+        if isActive,
+           (wasPreparingVoiceInput || !wasRecordingVoiceInput),
+           hapticsEnabled {
+            voiceReadyFeedbackGenerator.notificationOccurred(.success)
+        }
+        wasPreparingVoiceInput = isPreparing
+        wasRecordingVoiceInput = isActive
+
         updateRecordingButton(
             isLaunchingApp: (isLaunchingApp && !isFresh)
-                || (isAwaitingRecordingCommand && !isActive && !isTranscribing)
+                || (isAwaitingRecordingCommand
+                    && !isPreparing
+                    && !isActive
+                    && !isTranscribing),
+            isPreparing: isPreparing
         )
         updateVoiceTaskPresentation(
             isRecording: isActive,
             isTranscribing: isTranscribing,
-            isAwaitingCommand: isAwaitingRecordingCommand,
+            isAwaitingCommand: isAwaitingRecordingCommand || isPreparing,
             audioLevel: isActive ? snapshot.audioLevel : 0
         )
 
@@ -2192,9 +2219,14 @@ final class KeyboardViewController: UIInputViewController,
         } else if shouldShowLaunchFailure, let launchFailureMessage {
             statusLabel.text = launchFailureMessage
             statusLabel.textColor = .systemRed
+        } else if isPreparing {
+            statusLabel.text = snapshot.status.isEmpty
+                ? "正在准备语音输入，请稍候"
+                : snapshot.status
+            statusLabel.textColor = .secondaryLabel
         } else if isActive {
             statusLabel.text = liveTranscript.isEmpty
-                ? "正在聆听，再次点击完成"
+                ? "可以说话 · 再次点击完成"
                 : liveTranscript
             statusLabel.textColor = snapshot.transcriptIsFinal
                 ? .label
@@ -2258,7 +2290,8 @@ final class KeyboardViewController: UIInputViewController,
     }
 
     private func updateRecordingButton(
-        isLaunchingApp: Bool
+        isLaunchingApp: Bool,
+        isPreparing: Bool
     ) {
         guard let recordingButton else {
             return
@@ -2268,7 +2301,16 @@ final class KeyboardViewController: UIInputViewController,
         var targetWidth: CGFloat
         var targetHeight: CGFloat
 
-        if isLaunchingApp {
+        if isPreparing {
+            configuration?.title = "正在准备…"
+            configuration?.image = nil
+            configuration?.baseBackgroundColor = .systemOrange.withAlphaComponent(0.25)
+            configuration?.baseForegroundColor = .label
+            targetWidth = 112
+            targetHeight = 44
+            recordingButton.isEnabled = false
+            recordingButton.accessibilityLabel = "正在准备语音输入，请稍候"
+        } else if isLaunchingApp {
             configuration?.title = "正在启动…"
             configuration?.image = nil
             configuration?.baseBackgroundColor = .systemGray3
@@ -2740,7 +2782,7 @@ final class KeyboardViewController: UIInputViewController,
                    response.requestID == request.id,
                    response.command == request.command {
                     switch response.phase {
-                    case .accepted:
+                    case .accepted, .preparing:
                         wasAccepted = true
                     case .recording where request.command == .start,
                          .stopped where request.command == .stop,
@@ -2781,6 +2823,7 @@ final class KeyboardViewController: UIInputViewController,
                     (request.command == .start && snapshot.isRecording)
                         || (request.command == .stop && !snapshot.isRecording)
                         || (request.command == .cancel
+                            && !snapshot.isPreparing
                             && !snapshot.isRecording
                             && !snapshot.isTranscribing)
                 )
@@ -2798,7 +2841,7 @@ final class KeyboardViewController: UIInputViewController,
                 }
 
                 let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
-                let deadline = wasAccepted ? 1.0 : 0.32
+                let deadline = wasAccepted ? 15.0 : 0.32
                 if elapsed >= deadline {
                     fallbackReason = wasAccepted
                         ? "accepted_without_completion"

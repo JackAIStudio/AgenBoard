@@ -149,7 +149,9 @@ struct ContentView: View {
                         if showsManualReturnGuidance {
                             VStack(alignment: .leading, spacing: 12) {
                                 Label(
-                                    recorder.isRecording ? "录音已启动" : "正在准备录音",
+                                    recorder.isRecording
+                                        ? "可以说话"
+                                        : "正在准备录音，请稍候",
                                     systemImage: "waveform.and.mic"
                                 )
                                 .font(.headline)
@@ -278,7 +280,11 @@ struct ContentView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(recorder.isRecording || recorder.isTranscribing)
+                    .disabled(
+                        recorder.isPreparingRecording
+                            || recorder.isRecording
+                            || recorder.isTranscribing
+                    )
                     .background(.thinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -297,7 +303,11 @@ struct ContentView: View {
                         }
                     }
                     .toggleStyle(.switch)
-                    .disabled(recorder.isRecording || recorder.isTranscribing)
+                    .disabled(
+                        recorder.isPreparingRecording
+                            || recorder.isRecording
+                            || recorder.isTranscribing
+                    )
                     .padding(14)
                     .background(.thinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -311,7 +321,11 @@ struct ContentView: View {
                             .frame(height: 54)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(recorder.isTranscribing || !selectedProviderIsReady)
+                    .disabled(
+                        recorder.isPreparingRecording
+                            || recorder.isTranscribing
+                            || !selectedProviderIsReady
+                    )
 
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -333,7 +347,11 @@ struct ContentView: View {
                             } label: {
                                 Label(recorder.playbackButtonTitle, systemImage: recorder.playbackButtonIcon)
                             }
-                            .disabled(!recorder.canPlayRecording || recorder.isRecording)
+                            .disabled(
+                                !recorder.canPlayRecording
+                                    || recorder.isPreparingRecording
+                                    || recorder.isRecording
+                            )
 
                             Spacer()
 
@@ -475,7 +493,11 @@ struct ContentView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(recorder.isRecording || recorder.isTranscribing)
+                    .disabled(
+                        recorder.isPreparingRecording
+                            || recorder.isRecording
+                            || recorder.isTranscribing
+                    )
                     .background(.thinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -619,7 +641,11 @@ struct ContentView: View {
                         } label: {
                             Label("清空", systemImage: "trash")
                         }
-                        .disabled(recorder.transcript.isEmpty && !recorder.isRecording)
+                        .disabled(
+                            recorder.transcript.isEmpty
+                                && !recorder.isPreparingRecording
+                                && !recorder.isRecording
+                        )
                     }
                 }
                 .padding(20)
@@ -663,6 +689,8 @@ struct ContentView: View {
         .onChange(of: recorder.isRecording) { _, isRecording in
             pip.setRecordingState(isRecording)
             if isRecording {
+                UINotificationFeedbackGenerator()
+                    .notificationOccurred(.success)
                 queuedRecordingStartRequest = nil
                 RecordingLaunchMetrics.mark(
                     "main_recording_state_ready",
@@ -1004,6 +1032,7 @@ struct ContentView: View {
                 && scenePhase == .active
                 && request.command == .start
                 && !recorder.isRecording
+                && !recorder.isPreparingRecording
                 && !retriedFailedRecordingRequestIDs.contains(request.id)
                 && response?.requestID == request.id
                 && response?.phase == .failed
@@ -1018,6 +1047,7 @@ struct ContentView: View {
         // URL launch makes the scene active, avoiding a foreground race.
         let requiresForeground = request.command == .start
             && !recorder.isRecording
+            && !recorder.isPreparingRecording
             && request.requiresForegroundRoundTrip
         guard !requiresForeground || scenePhase == .active else {
             if deferredRecordingRequestID != request.id {
@@ -1074,6 +1104,12 @@ struct ContentView: View {
                     for: request,
                     phase: .recording
                 )
+            } else if recorder.isPreparingRecording {
+                SharedCommandStore.updateRecordingRequestResponse(
+                    for: request,
+                    phase: .preparing,
+                    message: "正在启动麦克风和 FunASR 实时链路"
+                )
             } else if recorder.isTranscribing {
                 queuedRecordingStartRequest = request
                 SharedCommandStore.updateRecordingRequestResponse(
@@ -1108,6 +1144,7 @@ struct ContentView: View {
 
     private func startQueuedRecordingIfReady() {
         guard scenePhase == .active,
+              !recorder.isPreparingRecording,
               !recorder.isRecording,
               !recorder.isTranscribing,
               let request = queuedRecordingStartRequest else {
@@ -1146,6 +1183,7 @@ struct ContentView: View {
               request.sourceHost?.canOpenApplication == true,
               !returnAttemptedRequestIDs.contains(request.id),
               recorder.isRecording,
+              !recorder.isPreparingRecording,
               pip.isPictureInPictureActive
                 || pip.isPreparedForBackgroundTransition else {
             return
@@ -1182,6 +1220,7 @@ struct ContentView: View {
                   activeLaunchRequest?.sourceHost?.canOpenApplication == true,
                   !returnAttemptedRequestIDs.contains(requestID),
                   recorder.isRecording,
+                  !recorder.isPreparingRecording,
                   pip.isPictureInPictureActive
                     || pip.isPreparedForBackgroundTransition else {
                 return

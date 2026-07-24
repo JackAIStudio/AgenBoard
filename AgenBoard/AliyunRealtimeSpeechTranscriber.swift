@@ -22,16 +22,26 @@ enum AliyunRealtimeSpeechTranscriber {
     static func transcribe(
         audioURL: URL,
         hotwords: [String],
+        playbackRate: Double = 1,
+        launchRequest: SharedRecordingToggleRequest? = nil,
+        preparedVocabulary: AliyunVocabularySetup? = nil,
         progress: @escaping ProgressHandler
     ) async throws -> AliyunRealtimeRecognitionOutput {
-        progress("阿里实时 · 正在同步热词")
-        let vocabulary = try await AliyunSpeechTranscriber.prepareVocabulary(
-            hotwords: hotwords,
-            target: .realtime
-        )
+        let vocabulary: AliyunVocabularySetup
+        if let preparedVocabulary {
+            progress("阿里实时 · 正在复用本次热词配置")
+            vocabulary = preparedVocabulary
+        } else {
+            progress("阿里实时 · 正在同步热词")
+            vocabulary = try await AliyunSpeechTranscriber.prepareVocabulary(
+                hotwords: hotwords,
+                target: .realtime
+            )
+        }
         let session = AliyunRealtimeSpeechSession(
             configuration: try AliyunSpeechConfiguration.load(),
-            vocabulary: vocabulary
+            vocabulary: vocabulary,
+            launchRequest: launchRequest
         ) { text, isFinal in
             let characterCount = text.count
             progress(
@@ -44,8 +54,21 @@ enum AliyunRealtimeSpeechTranscriber {
         do {
             progress("阿里实时 · 正在建立连接")
             try await session.connect()
-            progress("阿里实时 · 正在按录音原速推流")
-            try await streamAudioFile(audioURL, to: session)
+            progress(
+                playbackRate > 1
+                    ? String(
+                        format: "阿里实时 · 正在以 %.1f 倍速恢复缓存",
+                        min(1.5, playbackRate)
+                    )
+                    : "阿里实时 · 正在按录音原速推流"
+            )
+            try await streamAudioFile(
+                audioURL,
+                to: session,
+                playbackRate: playbackRate
+            )
+            progress("阿里实时 · 正在等待服务端断句")
+            try await session.sendEndOfSpeechPadding()
             progress("阿里实时 · 正在等待最终结果")
             return try await session.finish()
         } catch {
@@ -56,7 +79,8 @@ enum AliyunRealtimeSpeechTranscriber {
 
     private static func streamAudioFile(
         _ audioURL: URL,
-        to session: AliyunRealtimeSpeechSession
+        to session: AliyunRealtimeSpeechSession,
+        playbackRate: Double
     ) async throws {
         let asset = AVURLAsset(url: audioURL)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
@@ -130,6 +154,7 @@ enum AliyunRealtimeSpeechTranscriber {
                 try await paceAudio(
                     sentByteCount: sentByteCount,
                     bytesPerSecond: bytesPerSecond,
+                    playbackRate: playbackRate,
                     startedAt: streamStartedAt
                 )
             }
@@ -140,11 +165,13 @@ enum AliyunRealtimeSpeechTranscriber {
                 ?? AliyunSpeechServiceError.invalidResponse("读取历史录音失败。")
         }
         if !pending.isEmpty {
+            pending.append(Data(count: packetByteCount - pending.count))
             try await session.sendAudio(pending)
             sentByteCount += pending.count
             try await paceAudio(
                 sentByteCount: sentByteCount,
                 bytesPerSecond: bytesPerSecond,
+                playbackRate: playbackRate,
                 startedAt: streamStartedAt
             )
         }
@@ -153,9 +180,13 @@ enum AliyunRealtimeSpeechTranscriber {
     private static func paceAudio(
         sentByteCount: Int,
         bytesPerSecond: Int,
+        playbackRate: Double,
         startedAt: Date
     ) async throws {
-        let targetElapsed = Double(sentByteCount) / Double(bytesPerSecond)
+        let safePlaybackRate = max(1, min(1.5, playbackRate))
+        let targetElapsed = Double(sentByteCount)
+            / Double(bytesPerSecond)
+            / safePlaybackRate
         let delay = targetElapsed - Date().timeIntervalSince(startedAt)
         guard delay > 0 else {
             return
@@ -172,6 +203,7 @@ final class AliyunRealtimeSpeechSession {
 
     private let configuration: AliyunSpeechConfiguration
     private let vocabulary: AliyunVocabularySetup
+    private let launchRequest: SharedRecordingToggleRequest?
     private let transcriptHandler: TranscriptHandler
     private let taskID = UUID().uuidString.lowercased()
 
@@ -192,14 +224,20 @@ final class AliyunRealtimeSpeechSession {
     private var firstResultAt: Date?
     private var finishSentAt: Date?
     private var billedDurationSeconds: Int?
+    private var sentAudioBytes = 0
+    private var sentEndPaddingBytes = 0
+    private var interimResultCount = 0
+    private var finalResultCount = 0
 
     init(
         configuration: AliyunSpeechConfiguration,
         vocabulary: AliyunVocabularySetup,
+        launchRequest: SharedRecordingToggleRequest? = nil,
         transcriptHandler: @escaping TranscriptHandler
     ) {
         self.configuration = configuration
         self.vocabulary = vocabulary
+        self.launchRequest = launchRequest
         self.transcriptHandler = transcriptHandler
     }
 
@@ -235,6 +273,29 @@ final class AliyunRealtimeSpeechSession {
             firstAudioSentAt = Date()
         }
         try await socket.send(.data(data))
+        sentAudioBytes += data.count
+    }
+
+    /// Fun-ASR 的 VAD 需要在语音后看到足够的静音才能稳定生成
+    /// `sentence_end=true`。用户通常说完后立即点停止，`finish-task`
+    /// 本身并不会可靠地代替这段静音，因此按实时节奏补 800 ms。
+    func sendEndOfSpeechPadding() async throws {
+        let packetByteCount = 3_200 // 16 kHz · mono · Int16 · 100 ms
+        let packet = Data(count: packetByteCount)
+        let packetCount = 8
+
+        for _ in 0..<packetCount {
+            try Task.checkCancellation()
+            try await sendAudio(packet)
+            sentEndPaddingBytes += packet.count
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        RecordingLaunchMetrics.mark(
+            "main_realtime_end_padding_sent",
+            request: launchRequest,
+            detail: "padding_bytes=\(sentEndPaddingBytes) duration_ms=800"
+        )
     }
 
     func finish() async throws -> AliyunRealtimeRecognitionOutput {
@@ -250,7 +311,18 @@ final class AliyunRealtimeSpeechSession {
         try await socket.send(.string(try finishTaskMessage()))
         try await waitUntilFinished()
 
-        let sentences = finalSentences.values.sorted { lhs, rhs in
+        var resolvedSentences = finalSentences
+        var usedInterimFallback = false
+        if let interimSentence,
+           !interimSentence.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           resolvedSentences[interimSentence.sentenceID] == nil {
+            // Fun-ASR may acknowledge finish-task before the last partial sentence
+            // receives sentence_end=true. Preserve the latest non-empty partial
+            // result instead of replacing the live transcript with an empty value.
+            resolvedSentences[interimSentence.sentenceID] = interimSentence
+            usedInterimFallback = true
+        }
+        let sentences = resolvedSentences.values.sorted { lhs, rhs in
             lhs.sentenceID < rhs.sentenceID
         }
         let transcript = sentences.map(\.text).joined()
@@ -273,6 +345,19 @@ final class AliyunRealtimeSpeechSession {
         }
         let finalizationElapsed = now.timeIntervalSince(finishSentAt ?? now)
 
+        RecordingLaunchMetrics.mark(
+            "main_realtime_session_finished",
+            request: launchRequest,
+            detail: [
+                "audio_bytes=\(sentAudioBytes)",
+                "speech_audio_bytes=\(sentAudioBytes - sentEndPaddingBytes)",
+                "end_padding_bytes=\(sentEndPaddingBytes)",
+                "interim_results=\(interimResultCount)",
+                "final_results=\(finalResultCount)",
+                "interim_fallback=\(usedInterimFallback ? 1 : 0)",
+                "transcript_chars=\(transcript.count)"
+            ].joined(separator: " ")
+        )
         closeSocket()
         return AliyunRealtimeRecognitionOutput(
             serviceOutput: SpeechRecognitionServiceOutput(
@@ -356,9 +441,11 @@ final class AliyunRealtimeSpeechSession {
                 billedDurationSeconds = max(billedDurationSeconds ?? 0, duration)
             }
             if sentence.sentenceEnd {
+                finalResultCount += 1
                 finalSentences[sentence.sentenceID] = sentence
                 interimSentence = nil
             } else {
+                interimResultCount += 1
                 interimSentence = sentence
             }
             transcriptHandler(composedTranscript(), sentence.sentenceEnd)
@@ -533,6 +620,12 @@ final class AliyunRealtimeAudioCapture: @unchecked Sendable {
     private var outputFormat: AVAudioFormat?
     private var totalOutputFrames: AVAudioFramePosition = 0
     private var isStopped = false
+
+    var capturedPCMByteCount: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return Int(totalOutputFrames) * MemoryLayout<Int16>.size
+    }
 
     init(
         fileURL: URL,

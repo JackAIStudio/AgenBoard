@@ -2,6 +2,7 @@ import Foundation
 import os
 
 struct SharedRecordingSnapshot {
+    let isPreparing: Bool
     let isRecording: Bool
     let isTranscribing: Bool
     let isBackgroundStartReady: Bool
@@ -54,6 +55,7 @@ struct SharedRecordingToggleRequest {
 
 enum SharedRecordingRequestPhase: String {
     case accepted
+    case preparing
     case recording
     case stopped
     case cancelled
@@ -172,6 +174,7 @@ enum SharedCommandStore {
     private static let recordingResponseMessageKey = "recordingResponseMessage"
     private static let recordingResponseUpdatedAtKey = "recordingResponseUpdatedAt"
     private static let recordingIsActiveKey = "recordingIsActive"
+    private static let recordingIsPreparingKey = "recordingIsPreparing"
     private static let recordingIsTranscribingKey = "recordingIsTranscribing"
     private static let recordingBackgroundStartReadyKey =
         "recordingBackgroundStartReady"
@@ -770,6 +773,7 @@ enum SharedCommandStore {
     }
 
     static func updateRecordingSnapshot(
+        isPreparing: Bool,
         isRecording: Bool,
         isTranscribing: Bool,
         audioLevel: Double,
@@ -787,6 +791,7 @@ enum SharedCommandStore {
         if defaults.string(forKey: recordingStatusKey) != status {
             defaults.set(updatedAt, forKey: recordingStatusChangedAtKey)
         }
+        defaults.set(isPreparing, forKey: recordingIsPreparingKey)
         defaults.set(isRecording, forKey: recordingIsActiveKey)
         defaults.set(isTranscribing, forKey: recordingIsTranscribingKey)
         defaults.set(max(0, min(1, audioLevel)), forKey: recordingAudioLevelKey)
@@ -816,6 +821,7 @@ enum SharedCommandStore {
     static func latestRecordingSnapshot() -> SharedRecordingSnapshot {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return SharedRecordingSnapshot(
+                isPreparing: false,
                 isRecording: false,
                 isTranscribing: false,
                 isBackgroundStartReady: false,
@@ -833,6 +839,7 @@ enum SharedCommandStore {
         let updatedAt = defaults.double(forKey: recordingUpdatedAtKey)
         let storedStatusChangedAt = defaults.double(forKey: recordingStatusChangedAtKey)
         return SharedRecordingSnapshot(
+            isPreparing: defaults.bool(forKey: recordingIsPreparingKey),
             isRecording: defaults.bool(forKey: recordingIsActiveKey),
             isTranscribing: defaults.bool(forKey: recordingIsTranscribingKey),
             isBackgroundStartReady: defaults.bool(
