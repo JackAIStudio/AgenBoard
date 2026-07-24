@@ -10,7 +10,7 @@
 ## 核心能力
 
 - **语音输入闭环**：从键盘启动和结束录音，识别完成后自动回填文字。
-- **三种识别方案**：支持 Apple Speech、阿里云 Fun-ASR 文件版，以及边录边转写的 Fun-ASR 实时版。
+- **两种日常识别方案**：支持 Apple Speech，以及边录边转写的阿里云 Fun-ASR 实时版；历史原音频可按需使用 Fun-ASR 文件版重新转写。
 - **热词增强**：按置顶、启用状态和最近命中时间，从词库中最多激活 100 个热词。
 - **完整拼音键盘**：内置 librime 与雾凇拼音，支持候选分页、用户词频学习、英文、数字、符号和光标拖动。
 - **快捷短语**：在主 App 中管理常用短语，并通过键盘快速输入。
@@ -22,7 +22,7 @@
 
 1. 键盘扩展通过 App Group 向主 App 发送录音指令。
 2. 主 App 使用画中画维持后台录音；冷启动时会短暂打开 AgenBoard，再尝试返回原 App。
-3. 主 App 按当前方案在录音期间实时转写，或在录音结束后提交文件识别，再将结果同步回键盘。
+3. 主 App 按当前方案使用 Apple Speech，或在录音期间通过阿里云 Fun-ASR 实时转写，再将结果同步回键盘。
 4. 键盘确认结果属于本次请求后，将文字写入当前输入框。
 
 因此，语音状态、识别结果和设置同步需要开启键盘的“允许完全访问”。键盘扩展本身不发起网络请求。
@@ -34,20 +34,20 @@
 
 - 每次录音及其识别历史默认保存在当前设备；在 App 中删除对应历史时，本地录音也会被删除。
 - 使用 Apple 识别时，录音交由系统语音能力处理：iOS 26 使用设备端 SpeechAnalyzer；iOS 17–25 是否连接 Apple 服务由系统和设备能力决定。
-- 使用阿里云 Fun-ASR 时，主 App 使用你的 API Key 将录音和已启用热词直接发送到阿里云百炼，不经过项目维护者控制的服务器。文件版使用百炼托管的私有临时存储（48 小时后自动清理）；实时版在录音时通过 WebSocket 直接发送音频流，不经过临时文件 URL。
+- 使用阿里云 Fun-ASR 实时版时，主 App 使用你的 API Key，在录音过程中通过 WebSocket 将音频流和已启用热词直接发送到阿里云百炼。只有你在识别历史中主动发起文件版重新转写时，完整录音才会上传到百炼托管的私有临时存储（48 小时后自动清理）。两条链路都不经过项目维护者控制的服务器。
 - 开源使上述实现可以被审查，但真正的数据边界来自当前代码中的网络路径和存储设计。本说明适用于本仓库当前源代码；第三方修改或重新分发的版本可能采用不同的数据处理方式。
 
 完整说明及删除、导入和导出规则见 [PRIVACY.md](PRIVACY.md)。
 
 ## 识别服务
 
-| 方案 | 适合场景 | 处理方式 | 第三方云端存储 |
+| 用途 | 方案 | 处理方式 | 第三方云端存储 |
 | --- | --- | --- | --- |
-| Apple 系统识别 | 日常聊天、随手记录、快速回填 | iOS 26 使用设备端 SpeechAnalyzer；iOS 17–25 使用 Apple Speech 兼容路径 | iOS 26 不需要；iOS 17–25 联网由 Apple 系统决定 |
-| 阿里云 Fun-ASR 文件版 | 长录音、批量转写 | 录音结束后上传整段文件并异步识别 | 使用百炼托管的私有临时存储，48 小时后自动清理 |
-| 阿里云 Fun-ASR 实时版 | 语音输入、低停止后等待 | 录音时通过 WebSocket 发送 PCM 并同步接收文本 | 不使用临时文件 URL；音频流直接发送给百炼处理 |
+| 日常录音 | Apple 系统识别 | iOS 26 使用设备端 SpeechAnalyzer；iOS 17–25 使用 Apple Speech 兼容路径 | iOS 26 不需要；iOS 17–25 联网由 Apple 系统决定 |
+| 日常录音 | 阿里云 Fun-ASR 实时版 | 录音时通过 WebSocket 发送 PCM 并同步接收文本 | 不使用临时文件 URL；音频流直接发送给百炼处理 |
+| 识别历史 | 阿里云 Fun-ASR 文件版 | 用户主动选择后上传保存的原音频并异步重新转写，可用于长录音和实时失败恢复 | 使用百炼托管的私有临时存储，48 小时后自动清理 |
 
-两种阿里云方案都使用用户自己的华北 2（北京）百炼 API Key，均不经过项目维护者的服务器。
+阿里云实时识别和历史文件重新转写都使用用户自己的华北 2（北京）百炼 API Key，均不经过项目维护者的服务器。文件版不会出现在录音前的日常识别服务选项中，也不会在实时识别失败后自动调用。
 
 ### 配置阿里云 Fun-ASR
 
@@ -64,7 +64,7 @@ AgenBoard 当前版本固定连接阿里云百炼华北 2（北京）地域，�
 
 更多信息请参阅阿里云官方的[获取 API Key 教程](https://help.aliyun.com/zh/model-studio/get-api-key)和[地域与接入域名说明](https://help.aliyun.com/zh/model-studio/regions/)。
 
-阿里云 API Key 在日常配置中只保存在本机钥匙串；仅当用户在数据导出页明确选择时，才会写入导出包。文件版使用百炼提供的临时存储，用户不需要创建 OSS Bucket；相关限制见[上传本地文件获取临时 URL](https://help.aliyun.com/zh/model-studio/get-temporary-file-url/)。实时版使用百炼的 [Fun-ASR WebSocket API](https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api)，不走该临时存储链路。
+阿里云 API Key 在日常配置中只保存在本机钥匙串；仅当用户在数据导出页明确选择时，才会写入导出包。历史文件重新转写使用百炼提供的临时存储，用户不需要创建 OSS Bucket；相关限制见[上传本地文件获取临时 URL](https://help.aliyun.com/zh/model-studio/get-temporary-file-url/)。日常实时识别使用百炼的 [Fun-ASR WebSocket API](https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api)，不走该临时存储链路。
 
 ## 构建
 
@@ -91,7 +91,11 @@ xcodebuild \
   build
 ```
 
-如需安装到真机，请在 Xcode 的 **Signing & Capabilities** 中，分别为 `AgenBoard` 和 `AgenBoardKeyboard` 两个 target 选择自己的 Team。项目会自动派生对应的 Bundle ID 和 App Group。
+仓库包含维护者的公开默认 Team 标识，仅作为开箱即用的构建基线；它不包含签名证书或私钥。模拟器构建不需要 Apple Developer 账号，也无需修改签名配置。
+
+如需安装到真机，请在 Xcode 的 **Signing & Capabilities** 中，分别为 `AgenBoard` 和 `AgenBoardKeyboard` 两个 target 选择同一个自己的 Team。target 级设置会覆盖仓库默认值，项目会自动派生属于该 Team 的 Bundle ID 和 App Group，无需手动修改标识符。
+
+长期参与开发且希望避免 Xcode 将个人 Team 写入 `project.pbxproj` 时，可以选择将 `Config/Local.xcconfig.example` 复制为被 Git 忽略的 `Config/Local.xcconfig` 并填写自己的 Team ID；这是可选优化，不是构建前置步骤。
 
 ## 启用键盘
 

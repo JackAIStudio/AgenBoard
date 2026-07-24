@@ -6,6 +6,8 @@ SCRIPT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIRECTORY="$(cd "${SCRIPT_DIRECTORY}/.." && pwd)"
 PROJECT_FILE="${PROJECT_DIRECTORY}/AgenBoard.xcodeproj/project.pbxproj"
 PUBLIC_CONFIG="${PROJECT_DIRECTORY}/Config/Shared.xcconfig"
+LOCAL_CONFIG_EXAMPLE="${PROJECT_DIRECTORY}/Config/Local.xcconfig.example"
+GITIGNORE="${PROJECT_DIRECTORY}/.gitignore"
 KEYBOARD_SCHEME="${PROJECT_DIRECTORY}/AgenBoard.xcodeproj/xcshareddata/xcschemes/AgenBoardKeyboard.xcscheme"
 
 fail() {
@@ -16,7 +18,7 @@ fail() {
 if git -C "${PROJECT_DIRECTORY}" show \
   ':AgenBoard.xcodeproj/project.pbxproj' | \
   grep -Eq 'DEVELOPMENT_TEAM[[:space:]]*='; then
-  fail 'Git 暂存区中的 project.pbxproj 包含个人 Team。请取消暂存该签名改动。'
+  fail 'Git 暂存区中的 project.pbxproj 包含 target 级 Team。默认 Team 只能集中定义在 Shared.xcconfig。'
 fi
 
 unexpected_bundle_settings="$({
@@ -28,11 +30,45 @@ fi
 
 if ! grep -Fqx 'AGENBOARD_IDENTIFIER_SUFFIX = $(DEVELOPMENT_TEAM)' \
   "${PUBLIC_CONFIG}"; then
-  fail '真机标识符必须由 Xcode 中选择的 DEVELOPMENT_TEAM 自动派生。'
+  fail '真机标识符必须由最终生效的 DEVELOPMENT_TEAM 自动派生。'
 fi
 
-if grep -Eq 'Local\.xcconfig|#include\?' "${PUBLIC_CONFIG}"; then
-  fail '公共配置不应依赖额外的本地配置文件。'
+default_team_count="$(
+  grep -Ec '^DEVELOPMENT_TEAM = [A-Z0-9]{10}$' "${PUBLIC_CONFIG}" || true
+)"
+all_team_count="$(
+  grep -Ec '^DEVELOPMENT_TEAM[[:space:]]*=' "${PUBLIC_CONFIG}" || true
+)"
+if [[ "${default_team_count}" != "1" || "${all_team_count}" != "1" ]]; then
+  fail 'Shared.xcconfig 必须且只能包含一个 10 位公开默认 Team。'
+fi
+
+if ! grep -Fqx '#include? "Local.xcconfig"' "${PUBLIC_CONFIG}"; then
+  fail 'Shared.xcconfig 必须可选加载 Local.xcconfig。'
+fi
+
+default_team_line="$(
+  grep -n -m 1 '^DEVELOPMENT_TEAM[[:space:]]*=' "${PUBLIC_CONFIG}" | cut -d: -f1
+)"
+local_include_line="$(
+  grep -n -m 1 -F '#include? "Local.xcconfig"' "${PUBLIC_CONFIG}" | cut -d: -f1
+)"
+if (( local_include_line <= default_team_line )); then
+  fail 'Local.xcconfig 必须在公开默认 Team 之后加载，确保本地设置可以覆盖默认值。'
+fi
+
+if ! grep -Fqx '/Config/Local.xcconfig' "${GITIGNORE}"; then
+  fail 'Config/Local.xcconfig 必须被 Git 忽略。'
+fi
+
+if git -C "${PROJECT_DIRECTORY}" ls-files --error-unmatch \
+  'Config/Local.xcconfig' >/dev/null 2>&1; then
+  fail 'Config/Local.xcconfig 是本地文件，不得加入版本控制。'
+fi
+
+if ! grep -Fqx 'DEVELOPMENT_TEAM = YOUR_TEAM_ID' \
+  "${LOCAL_CONFIG_EXAMPLE}"; then
+  fail 'Local.xcconfig.example 必须保留 Team ID 占位符。'
 fi
 
 for expected_setting in \

@@ -8,6 +8,16 @@ enum SpeechRecognitionProvider: String, Codable, CaseIterable, Hashable, Identif
 
     var id: String { rawValue }
 
+    /// 可在录音前选择的主识别方案。文件版仅用于识别历史的重新转写和失败恢复。
+    static let primaryCases: [SpeechRecognitionProvider] = [
+        .apple,
+        .aliyunRealtime
+    ]
+
+    var primaryProvider: SpeechRecognitionProvider {
+        self == .aliyun ? .aliyunRealtime : self
+    }
+
     var title: String {
         switch self {
         case .apple:
@@ -220,10 +230,14 @@ enum SpeechServicePreferences {
                   let provider = SpeechRecognitionProvider(rawValue: rawValue) else {
                 return .apple
             }
-            return provider
+            let primaryProvider = provider.primaryProvider
+            if primaryProvider != provider {
+                defaults.set(primaryProvider.rawValue, forKey: providerKey)
+            }
+            return primaryProvider
         }
         set {
-            defaults.set(newValue.rawValue, forKey: providerKey)
+            defaults.set(newValue.primaryProvider.rawValue, forKey: providerKey)
         }
     }
 

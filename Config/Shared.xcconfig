@@ -1,4 +1,11 @@
-// 真机标识符由开发者在 Xcode 中选择的 Team 自动派生。
+// 公开的默认 Team 只用于提供开箱即用的签名基线，不包含证书或私钥。
+// 贡献者在 Xcode 中选择自己的 Team 后，target 级设置会覆盖此默认值。
+DEVELOPMENT_TEAM = 92K6CKZ4KM
+
+// 长期贡献者可选创建被 Git 忽略的 Local.xcconfig，以保持工程文件干净。
+#include? "Local.xcconfig"
+
+// 真机标识符由最终生效的 Team 自动派生。
 AGENBOARD_IDENTIFIER_SUFFIX = $(DEVELOPMENT_TEAM)
 
 // 模拟器不需要签名，使用稳定的公开标识符。

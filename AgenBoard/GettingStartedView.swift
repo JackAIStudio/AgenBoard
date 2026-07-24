@@ -32,7 +32,7 @@ struct GettingStartedView: View {
     }
 
     private var provider: SpeechRecognitionProvider {
-        SpeechRecognitionProvider(rawValue: providerRawValue) ?? .apple
+        (SpeechRecognitionProvider(rawValue: providerRawValue) ?? .apple).primaryProvider
     }
 
     var body: some View {
@@ -104,7 +104,7 @@ struct GettingStartedView: View {
                     SpeechProviderSelectionCards(selection: $providerRawValue)
                 }
 
-                if provider == .aliyun {
+                if provider.usesAliyun {
                     aliyunConfigurationPrompt
                 }
 
@@ -294,7 +294,7 @@ struct SpeechProviderSelectionCards: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            ForEach(SpeechRecognitionProvider.allCases) { provider in
+            ForEach(SpeechRecognitionProvider.primaryCases) { provider in
                 SpeechProviderChoiceCard(
                     provider: provider,
                     isSelected: selection == provider.rawValue
@@ -302,6 +302,13 @@ struct SpeechProviderSelectionCards: View {
                     selection = provider.rawValue
                 }
             }
+        }
+        .onAppear {
+            guard let storedProvider = SpeechRecognitionProvider(rawValue: selection) else {
+                selection = SpeechRecognitionProvider.apple.rawValue
+                return
+            }
+            selection = storedProvider.primaryProvider.rawValue
         }
     }
 }

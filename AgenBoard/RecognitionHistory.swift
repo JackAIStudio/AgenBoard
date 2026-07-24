@@ -69,6 +69,7 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
     var withoutHotwordsWords: [SpeechRecognitionWord]?
     var withHotwordsRealtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
     var withoutHotwordsRealtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
+    var originalResult: RecognitionBenchmarkResult? = nil
     var benchmarkResults: [RecognitionBenchmarkResult]? = nil
     var lastError: String?
     var lastErrorMode: RecognitionHotwordMode?
@@ -90,6 +91,27 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
 
     var availableBenchmarkResults: [RecognitionBenchmarkResult] {
         benchmarkResults ?? []
+    }
+
+    var resolvedOriginalResult: RecognitionBenchmarkResult? {
+        if let originalResult {
+            return originalResult
+        }
+        guard let originalProvider, let originalMode else {
+            return nil
+        }
+        return availableBenchmarkResults
+            .filter {
+                $0.provider == originalProvider && $0.mode == originalMode
+            }
+            .min { $0.completedAt < $1.completedAt }
+    }
+
+    var availableRerunResults: [RecognitionBenchmarkResult] {
+        guard let originalResult = resolvedOriginalResult else {
+            return availableBenchmarkResults
+        }
+        return availableBenchmarkResults.filter { $0 != originalResult }
     }
 
     func elapsed(for mode: RecognitionHotwordMode) -> TimeInterval? {
@@ -204,6 +226,7 @@ final class RecognitionHistoryStore: ObservableObject {
         changed = migrateLegacyTemporaryRecordings() || changed
         let attachedLegacyTranscript = attachLatestLegacyTranscriptIfPossible()
         changed = attachedLegacyTranscript || changed
+        changed = backfillOriginalResults() || changed
         sortItems()
 
         if changed {
@@ -318,24 +341,29 @@ final class RecognitionHistoryStore: ObservableObject {
             items[index].withoutHotwordsRealtimeMetrics = realtimeMetrics
         }
 
+        let result = RecognitionBenchmarkResult(
+            provider: provider,
+            mode: mode,
+            completedAt: Date(),
+            transcript: transcript,
+            elapsed: elapsed,
+            configuredHotwordCount: configuredHotwordCount,
+            matchedTerms: matchedTerms,
+            words: words,
+            fileMetrics: fileMetrics,
+            realtimeMetrics: realtimeMetrics
+        )
+        if items[index].originalResult == nil,
+           items[index].originalProvider == provider,
+           items[index].originalMode == mode {
+            items[index].originalResult = result
+        }
+
         var benchmarkResults = items[index].benchmarkResults ?? []
         benchmarkResults.removeAll {
             $0.provider == provider && $0.mode == mode
         }
-        benchmarkResults.append(
-            RecognitionBenchmarkResult(
-                provider: provider,
-                mode: mode,
-                completedAt: Date(),
-                transcript: transcript,
-                elapsed: elapsed,
-                configuredHotwordCount: configuredHotwordCount,
-                matchedTerms: matchedTerms,
-                words: words,
-                fileMetrics: fileMetrics,
-                realtimeMetrics: realtimeMetrics
-            )
-        )
+        benchmarkResults.append(result)
         items[index].benchmarkResults = benchmarkResults
 
         items[index].lastError = nil
@@ -395,7 +423,7 @@ final class RecognitionHistoryStore: ObservableObject {
         loadIfNeeded()
 
         let currentItems = items
-        let finalItems: [RecognitionHistoryItem]
+        var finalItems: [RecognitionHistoryItem]
         switch mode {
         case .replace:
             finalItems = importedItems
@@ -413,6 +441,7 @@ final class RecognitionHistoryStore: ObservableObject {
             }
             finalItems = merged
         }
+        _ = backfillOriginalResults(in: &finalItems)
 
         let parentDirectory = rootDirectory.deletingLastPathComponent()
         let stagingDirectory = parentDirectory.appendingPathComponent(
@@ -559,6 +588,10 @@ final class RecognitionHistoryStore: ObservableObject {
             withoutHotwordsRealtimeMetrics:
                 imported.withoutHotwordsRealtimeMetrics
                     ?? current.withoutHotwordsRealtimeMetrics,
+            originalResult: mergedOriginalResult(
+                current.originalResult,
+                imported.originalResult
+            ),
             benchmarkResults: mergeBenchmarkResults(
                 current.availableBenchmarkResults,
                 imported.availableBenchmarkResults
@@ -587,6 +620,66 @@ final class RecognitionHistoryStore: ObservableObject {
         return merged.values.sorted { lhs, rhs in
             lhs.completedAt < rhs.completedAt
         }
+    }
+
+    private func mergedOriginalResult(
+        _ current: RecognitionBenchmarkResult?,
+        _ imported: RecognitionBenchmarkResult?
+    ) -> RecognitionBenchmarkResult? {
+        switch (current, imported) {
+        case (.some(let current), .some(let imported)):
+            return current.completedAt <= imported.completedAt ? current : imported
+        case (.some(let current), .none):
+            return current
+        case (.none, .some(let imported)):
+            return imported
+        case (.none, .none):
+            return nil
+        }
+    }
+
+    private func backfillOriginalResults() -> Bool {
+        backfillOriginalResults(in: &items)
+    }
+
+    private func backfillOriginalResults(
+        in values: inout [RecognitionHistoryItem]
+    ) -> Bool {
+        var changed = false
+        for index in values.indices where values[index].originalResult == nil {
+            guard let provider = values[index].originalProvider,
+                  let mode = values[index].originalMode else {
+                continue
+            }
+
+            if let benchmark = values[index].availableBenchmarkResults
+                .filter({ $0.provider == provider && $0.mode == mode })
+                .min(by: { $0.completedAt < $1.completedAt }) {
+                values[index].originalResult = benchmark
+                changed = true
+                continue
+            }
+
+            guard let transcript = values[index].transcript(for: mode) else {
+                continue
+            }
+            values[index].originalResult = RecognitionBenchmarkResult(
+                provider: provider,
+                mode: mode,
+                completedAt: values[index].createdAt,
+                transcript: transcript,
+                elapsed: values[index].elapsed(for: mode) ?? 0,
+                configuredHotwordCount: mode == .withHotwords
+                    ? values[index].withHotwordsConfiguredCount ?? 0
+                    : 0,
+                matchedTerms: values[index].matchedTerms(for: mode),
+                words: values[index].words(for: mode),
+                fileMetrics: nil,
+                realtimeMetrics: values[index].realtimeMetrics(for: mode)
+            )
+            changed = true
+        }
+        return changed
     }
 
     private func mergedRecordingItem(

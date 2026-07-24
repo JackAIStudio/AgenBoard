@@ -56,7 +56,7 @@ struct ContentView: View {
     private let recordingRequestLifetime: TimeInterval = 15
 
     private var selectedProvider: SpeechRecognitionProvider {
-        SpeechRecognitionProvider(rawValue: providerRawValue) ?? .apple
+        (SpeechRecognitionProvider(rawValue: providerRawValue) ?? .apple).primaryProvider
     }
 
     private var selectedProviderIsReady: Bool {

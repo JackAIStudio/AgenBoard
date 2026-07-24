@@ -658,6 +658,7 @@ private struct PortableRecognitionRecord: Codable, Sendable {
     let createdAt: Date
     let audio: PortableAudioReference
     let originalRequest: PortableOriginalRecognitionRequest?
+    let originalResult: RecognitionBenchmarkResult?
     let withHotwords: PortableRecognitionResult?
     let withoutHotwords: PortableRecognitionResult?
     let benchmarkResults: [RecognitionBenchmarkResult]?
@@ -680,6 +681,7 @@ private struct PortableRecognitionRecord: Codable, Sendable {
         } else {
             originalRequest = nil
         }
+        originalResult = item.resolvedOriginalResult
         withHotwords = PortableRecognitionResult.make(
             transcript: item.transcriptWithHotwords,
             elapsedSeconds: item.withHotwordsElapsed,
@@ -732,6 +734,7 @@ private struct PortableRecognitionRecord: Codable, Sendable {
             withoutHotwordsWords: withoutHotwords?.words,
             withHotwordsRealtimeMetrics: withHotwords?.realtimeMetrics,
             withoutHotwordsRealtimeMetrics: withoutHotwords?.realtimeMetrics,
+            originalResult: originalResult,
             benchmarkResults: benchmarkResults,
             lastError: lastError?.message,
             lastErrorMode: lastError?.mode,

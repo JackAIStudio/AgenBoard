@@ -603,7 +603,7 @@ final class SpeechRecorder: ObservableObject {
 
         switch currentProvider {
         case .aliyun:
-            await transcribeWithAliyun(audioURL: recordingURL)
+            failTranscription("阿里云文件版仅用于识别历史，请重新选择日常识别服务。")
         case .aliyunRealtime:
             // 实时模式在录音期间已经完成推流，停止录音时由
             // finishAliyunRealtimeTranscription() 单独收尾。
@@ -614,41 +614,6 @@ final class SpeechRecorder: ObservableObject {
             } else {
                 transcribeWithLegacyRecognizer(audioURL: recordingURL)
             }
-        }
-    }
-
-    private func transcribeWithAliyun(audioURL: URL) async {
-        do {
-            let output = try await AliyunSpeechTranscriber.transcribe(
-                audioURL: audioURL,
-                hotwords: currentActiveHotwords
-            ) { [weak self] progress in
-                guard let self else {
-                    return
-                }
-                self.status = progress
-                self.publishRecordingSnapshot(isTranscribing: true, status: progress)
-            }
-            try Task.checkCancellation()
-            currentConfiguredHotwordCount = output.configuredHotwordCount
-            let ignoredSuffix = output.ignoredHotwords.isEmpty
-                ? ""
-                : "；另有 \(output.ignoredHotwords.count) 个词不符合阿里热词格式限制"
-            completeTranscription(
-                output.transcript,
-                elapsed: output.elapsed,
-                provider: .aliyun,
-                words: output.words,
-                fileMetrics: output.fileMetrics,
-                completionNote: ignoredSuffix
-            )
-        } catch is CancellationError {
-            guard !Task.isCancelled else {
-                return
-            }
-            failTranscription("阿里云识别意外中断，请重新录音后再试。")
-        } catch {
-            failTranscription("阿里云识别失败：\(error.localizedDescription)")
         }
     }
 

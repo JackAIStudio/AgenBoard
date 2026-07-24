@@ -20,6 +20,7 @@ DerivedData/
 .env
 .env.*
 !.env.example
+/Config/Local.xcconfig
 
 # Generated Rime data fetched from GitHub Releases
 /AgenBoardKeyboard/RimeData/Prebuilt/

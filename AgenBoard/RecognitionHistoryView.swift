@@ -89,8 +89,7 @@ private struct RecognitionHistoryRow: View {
     let item: RecognitionHistoryItem
 
     private var previewText: String {
-        if let originalMode = item.originalMode,
-           let transcript = item.transcript(for: originalMode),
+        if let transcript = item.resolvedOriginalResult?.transcript,
            !transcript.isEmpty {
             return transcript
         }
@@ -104,11 +103,21 @@ private struct RecognitionHistoryRow: View {
     }
 
     private var resultStatus: String {
-        if item.transcriptWithHotwords != nil && item.transcriptWithoutHotwords != nil {
-            return "两组已完成"
+        if let originalResult = item.resolvedOriginalResult {
+            let rerunCount = item.availableRerunResults.count
+            return rerunCount > 0
+                ? "\(originalResult.provider.shortTitle) · \(rerunCount) 组重转写"
+                : originalResult.provider.shortTitle
         }
-        if let mode = item.originalMode, item.transcript(for: mode) != nil {
-            return mode.title
+        if let latestResult = item.availableBenchmarkResults.max(
+            by: { $0.completedAt < $1.completedAt }
+        ) {
+            return item.originalProvider != nil && item.originalProvider != latestResult.provider
+                ? "\(latestResult.provider.shortTitle) · 已恢复"
+                : latestResult.provider.shortTitle
+        }
+        if let failedProvider = item.lastErrorProvider {
+            return "\(failedProvider.shortTitle) · 失败"
         }
         if item.transcriptWithHotwords != nil {
             return RecognitionHotwordMode.withHotwords.title
@@ -157,12 +166,8 @@ struct RecognitionHistoryDetailView: View {
     @ObservedObject var store: RecognitionHistoryStore
     let itemID: UUID
 
-    @AppStorage(
-        SpeechServicePreferences.providerKey,
-        store: SpeechServicePreferences.defaults
-    ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
-
     @StateObject private var playback = RecognitionHistoryPlaybackController()
+    @State private var selectedProvider = SpeechRecognitionProvider.aliyun
     @State private var selectedMode = RecognitionHotwordMode.withHotwords
     @State private var isRunning = false
     @State private var runningStatus = ""
@@ -173,16 +178,18 @@ struct RecognitionHistoryDetailView: View {
         store.item(id: itemID)
     }
 
-    private var selectedProvider: SpeechRecognitionProvider {
-        SpeechRecognitionProvider(rawValue: providerRawValue) ?? .apple
-    }
-
     var body: some View {
         Group {
             if let item {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         audioSection(item)
+                        if let originalResult = item.resolvedOriginalResult {
+                            RecognitionBenchmarkResultsSection(
+                                title: "原始识别结果",
+                                results: [originalResult]
+                            )
+                        }
                         if item.hasRecording {
                             testSection(item)
                         } else {
@@ -193,7 +200,12 @@ struct RecognitionHistoryDetailView: View {
                             comparisonSection(summary)
                         }
 
-                        if item.availableBenchmarkResults.isEmpty {
+                        if !item.availableRerunResults.isEmpty {
+                            RecognitionBenchmarkResultsSection(
+                                title: "重新转写结果",
+                                results: item.availableRerunResults
+                            )
+                        } else if item.resolvedOriginalResult == nil {
                             RecognitionResultSection(
                                 mode: .withHotwords,
                                 item: item
@@ -205,10 +217,6 @@ struct RecognitionHistoryDetailView: View {
                                 mode: .withoutHotwords,
                                 item: item
                             )
-                        } else {
-                            RecognitionBenchmarkResultsSection(
-                                results: item.availableBenchmarkResults
-                            )
                         }
                     }
                     .padding(20)
@@ -219,7 +227,7 @@ struct RecognitionHistoryDetailView: View {
         }
         .navigationTitle("识别历史")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("录音对照", isPresented: $showsAlert) {
+        .alert("重新转写", isPresented: $showsAlert) {
             Button("好") {}
         } message: {
             Text(alertMessage)
@@ -283,7 +291,7 @@ struct RecognitionHistoryDetailView: View {
     private func testSection(_ item: RecognitionHistoryItem) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("热词对照")
+                Text("重新转写")
                     .font(.headline)
 
                 Spacer()
@@ -297,12 +305,41 @@ struct RecognitionHistoryDetailView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Label(
-                "当前服务：\(selectedProvider.title)",
-                systemImage: selectedProvider.systemImage
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Picker("转写服务", selection: $selectedProvider) {
+                Text(SpeechRecognitionProvider.aliyun.title)
+                    .tag(SpeechRecognitionProvider.aliyun)
+                Text(SpeechRecognitionProvider.apple.title)
+                    .tag(SpeechRecognitionProvider.apple)
+                Text(SpeechRecognitionProvider.aliyunRealtime.title)
+                    .tag(SpeechRecognitionProvider.aliyunRealtime)
+            }
+            .pickerStyle(.menu)
+            .disabled(isRunning)
+
+            if selectedProvider == .aliyun {
+                Label(
+                    "推荐用于历史录音：整段异步处理，也可恢复实时识别失败的录音",
+                    systemImage: "clock.arrow.circlepath"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if selectedProvider == .aliyunRealtime {
+                Label(
+                    "历史音频会按原始时长重新推流；长录音通常优先使用文件版",
+                    systemImage: "hourglass"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+
+            if isRealtimeRecoveryCandidate(item), selectedProvider == .aliyun {
+                Label(
+                    "原实时识别未完成，可以使用保存的原音频恢复",
+                    systemImage: "exclamationmark.arrow.triangle.2.circlepath"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+            }
 
             Picker("识别模式", selection: $selectedMode) {
                 ForEach(RecognitionHotwordMode.allCases) { mode in
@@ -315,7 +352,12 @@ struct RecognitionHistoryDetailView: View {
             Button {
                 runTranscriptions([selectedMode], item: item)
             } label: {
-                Label("转写所选模式", systemImage: "waveform.badge.magnifyingglass")
+                Label(
+                    isRealtimeRecoveryCandidate(item) && selectedProvider == .aliyun
+                        ? "使用文件版恢复识别"
+                        : "重新转写所选模式",
+                    systemImage: "waveform.badge.magnifyingglass"
+                )
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
             }
@@ -325,7 +367,7 @@ struct RecognitionHistoryDetailView: View {
             Button {
                 runTranscriptions([.withHotwords, .withoutHotwords], item: item)
             } label: {
-                Label("运行两组对照", systemImage: "arrow.left.arrow.right")
+                Label("运行两组热词对照", systemImage: "arrow.left.arrow.right")
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
             }
@@ -347,9 +389,15 @@ struct RecognitionHistoryDetailView: View {
         }
     }
 
+    private func isRealtimeRecoveryCandidate(_ item: RecognitionHistoryItem) -> Bool {
+        item.originalProvider == .aliyunRealtime
+            && item.resolvedOriginalResult == nil
+            && item.lastErrorProvider == .aliyunRealtime
+    }
+
     private func comparisonSection(_ summary: RecognitionComparisonSummary) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("对照摘要")
+            Text("最近热词对照")
                 .font(.headline)
 
             HStack {
@@ -597,6 +645,7 @@ struct RecognitionHistoryDetailView: View {
 }
 
 private struct RecognitionBenchmarkResultsSection: View {
+    let title: String
     let results: [RecognitionBenchmarkResult]
 
     private var sortedResults: [RecognitionBenchmarkResult] {
@@ -618,7 +667,7 @@ private struct RecognitionBenchmarkResultsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("所有方案结果")
+                Text(title)
                     .font(.headline)
                 Spacer()
                 Text("\(results.count) 组")

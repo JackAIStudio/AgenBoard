@@ -7,13 +7,14 @@
 1. 使用 Xcode 26.4 或更高版本，推荐 Apple Silicon Mac。
 2. 克隆仓库后运行 `./scripts/fetch-rime-data.sh`，下载并校验锁定的 Rime 预编译数据。
 3. 使用 Xcode 打开 `AgenBoard.xcodeproj`，或执行 README 中无需签名的模拟器构建命令。
-4. 模拟器构建不需要签名配置。真机调试时，在 Xcode 的 “Signing & Capabilities” 中分别为 `AgenBoard` 和 `AgenBoardKeyboard` 两个 target 选择自己的 Team。两个 Bundle ID 和 App Group 会自动根据 Team 派生，无需手动修改。
+4. 仓库提供维护者的公开默认 Team 作为构建基线；模拟器构建不需要 Apple Developer 账号或额外签名配置。真机调试时，在 Xcode 的 “Signing & Capabilities” 中分别为 `AgenBoard` 和 `AgenBoardKeyboard` 两个 target 选择同一个自己的 Team。target 级设置会覆盖默认值，两个 Bundle ID 和 App Group 会自动根据最终生效的 Team 派生。
+5. 如果你长期参与开发并希望保持 `project.pbxproj` 干净，可以选择将 `Config/Local.xcconfig.example` 复制为 `Config/Local.xcconfig` 并填写自己的 Team ID。该文件已被 Git 忽略；这不是普通贡献者的必需步骤。
 
 ## 提交变更
 
 - 一个 Pull Request 聚焦一个问题，说明行为变化、验证方式和隐私影响。
 - UI 变更请附截图或短视频；数据格式变更请说明兼容和迁移策略。
-- Xcode 选择 Team 后可能在 `project.pbxproj` 中产生个人签名改动；可以长期保留为本地未提交状态，但不要把这些行暂存或提交到 Pull Request。`./scripts/check-public-config.sh` 会检查 Git 暂存区和 CI 中的提交版本。
+- Xcode 选择 Team 后可能在 `project.pbxproj` 中产生个人签名改动；可以保留为本地未提交状态，或使用可选的 `Config/Local.xcconfig`，但不要把 target 级 Team 暂存或提交到 Pull Request。公开默认 Team 只能集中定义在 `Config/Shared.xcconfig`；`./scripts/check-public-config.sh` 会检查 Git 暂存区和 CI 中的提交版本。
 - 不要提交 API Key、录音、真实转写、个人路径、签名证书、Provisioning Profile 或用户词典。
 - 不要把 `AgenBoardKeyboard/RimeData/Prebuilt/` 加回 Git。词库更新应固定上游版本与校验值，并通过 Release 资源发布二进制包和对应源码包。
 - 新增网络请求、数据收集或 Required Reason API 时，必须同步更新 `PRIVACY.md` 和相应 `PrivacyInfo.xcprivacy`。
