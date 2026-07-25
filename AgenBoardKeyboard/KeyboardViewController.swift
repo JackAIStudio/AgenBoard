@@ -82,6 +82,7 @@ final class KeyboardViewController: UIInputViewController,
     private weak var recordingLevelView: KeyboardAudioLevelView?
     private weak var cancelRecordingButton: UIButton?
     private weak var finishRecordingButton: UIButton?
+    private weak var insertCurrentResultButton: UIButton?
     private weak var voiceActivityRow: UIStackView?
     private weak var voiceActivityLabel: UILabel?
     private weak var voiceActiveActionRow: UIStackView?
@@ -124,6 +125,8 @@ final class KeyboardViewController: UIInputViewController,
     private var wasPreparingVoiceInput = false
     private var wasRecordingVoiceInput = false
     private var lastHandledRecognitionResultID: String?
+    private var hasManuallyInsertedCurrentVoiceResult = false
+    private var lastManualInsertFingerprint: String?
     private var lastInsertionDiagnosticState: String?
     private var retryableRecognitionResultID: String?
     private var insertionMessageUntil: TimeInterval = 0
@@ -518,7 +521,7 @@ final class KeyboardViewController: UIInputViewController,
             title: "取消",
             accessibilityLabel: "取消当前语音识别",
             action: #selector(cancelCurrentRecognition),
-            width: 116,
+            width: 100,
             style: .secondary
         )
         var cancelConfiguration = cancelButton.configuration
@@ -545,20 +548,33 @@ final class KeyboardViewController: UIInputViewController,
             systemImage: "stop.fill",
             accessibilityLabel: "完成语音输入",
             action: #selector(toggleRecording),
-            width: 116
+            width: 100
         )
         var finishConfiguration = finishButton.configuration
         finishConfiguration?.imagePadding = 6
         finishButton.configuration = finishConfiguration
         self.finishRecordingButton = finishButton
 
+        let insertButton = makeVoiceUtilityButton(
+            title: "插入",
+            systemImage: "text.insert",
+            accessibilityLabel: "插入当前识别结果",
+            action: #selector(insertCurrentVoiceResult),
+            width: 100
+        )
+        var insertConfiguration = insertButton.configuration
+        insertConfiguration?.imagePadding = 6
+        insertButton.configuration = insertConfiguration
+        insertButton.isHidden = true
+        self.insertCurrentResultButton = insertButton
+
         let activeActionRow = UIStackView(
-            arrangedSubviews: [cancelButton, finishButton]
+            arrangedSubviews: [cancelButton, insertButton, finishButton]
         )
         activeActionRow.axis = .horizontal
         activeActionRow.alignment = .fill
         activeActionRow.distribution = .fill
-        activeActionRow.spacing = 12
+        activeActionRow.spacing = 10
         activeActionRow.translatesAutoresizingMaskIntoConstraints = false
         activeActionRow.isHidden = true
         canvas.addSubview(activeActionRow)
@@ -625,7 +641,15 @@ final class KeyboardViewController: UIInputViewController,
 
             activeActionRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
             activeActionRow.bottomAnchor.constraint(equalTo: canvas.bottomAnchor, constant: -10),
-            activeActionRow.widthAnchor.constraint(equalToConstant: 244),
+            activeActionRow.leadingAnchor.constraint(
+                greaterThanOrEqualTo: canvas.leadingAnchor,
+                constant: 12
+            ),
+            activeActionRow.trailingAnchor.constraint(
+                lessThanOrEqualTo: canvas.trailingAnchor,
+                constant: -12
+            ),
+            activeActionRow.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
             activeActionRow.heightAnchor.constraint(equalToConstant: 44),
 
             textInputButtonRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
@@ -1864,6 +1888,8 @@ final class KeyboardViewController: UIInputViewController,
 
         SharedCommandStore.clearRecognitionResult()
         SharedCommandStore.cancelKeyboardAutoInsert()
+        hasManuallyInsertedCurrentVoiceResult = false
+        lastManualInsertFingerprint = nil
         guard let request = SharedCommandStore.requestRecordingCommand(
             .cancel,
             requiresForegroundRoundTrip: false
@@ -2196,6 +2222,14 @@ final class KeyboardViewController: UIInputViewController,
            hapticsEnabled {
             voiceReadyFeedbackGenerator.notificationOccurred(.success)
         }
+        if isActive && !wasRecordingVoiceInput {
+            // A brand-new recording session should start with a clean manual-insert state.
+            hasManuallyInsertedCurrentVoiceResult = false
+            lastManualInsertFingerprint = nil
+        } else if !isActive && !isTranscribing && !isPreparing {
+            hasManuallyInsertedCurrentVoiceResult = false
+            lastManualInsertFingerprint = nil
+        }
         wasPreparingVoiceInput = isPreparing
         wasRecordingVoiceInput = isActive
 
@@ -2207,11 +2241,15 @@ final class KeyboardViewController: UIInputViewController,
                     && !isTranscribing),
             isPreparing: isPreparing
         )
+        let canInsertCurrentResult = (isActive || isTranscribing)
+            && !liveTranscript.isEmpty
+            && !hasManuallyInsertedCurrentVoiceResult
         updateVoiceTaskPresentation(
             isRecording: isActive,
             isTranscribing: isTranscribing,
             isAwaitingCommand: isAwaitingRecordingCommand || isPreparing,
-            audioLevel: isActive ? snapshot.audioLevel : 0
+            audioLevel: isActive ? snapshot.audioLevel : 0,
+            canInsertCurrentResult: canInsertCurrentResult
         )
 
         if shouldKeepInsertionMessage {
@@ -2338,7 +2376,8 @@ final class KeyboardViewController: UIInputViewController,
         isRecording: Bool,
         isTranscribing: Bool,
         isAwaitingCommand: Bool,
-        audioLevel: Double
+        audioLevel: Double,
+        canInsertCurrentResult: Bool
     ) {
         let isTaskActive = isRecording || isTranscribing
 
@@ -2414,7 +2453,8 @@ final class KeyboardViewController: UIInputViewController,
             : "正在整理最终结果"
 
         guard let cancelRecordingButton,
-              let finishRecordingButton else {
+              let finishRecordingButton,
+              let insertCurrentResultButton else {
             return
         }
 
@@ -2426,6 +2466,19 @@ final class KeyboardViewController: UIInputViewController,
             : .tertiaryLabel
         cancelRecordingButton.configuration = configuration
 
+        insertCurrentResultButton.isHidden = !canInsertCurrentResult
+        insertCurrentResultButton.isEnabled = canInsertCurrentResult && !isAwaitingCommand
+        insertCurrentResultButton.alpha = insertCurrentResultButton.isEnabled ? 1 : 0.55
+        var insertConfiguration = insertCurrentResultButton.configuration
+        insertConfiguration?.title = "插入"
+        insertConfiguration?.image = UIImage(systemName: "text.insert")
+        insertConfiguration?.imagePadding = 6
+        insertCurrentResultButton.configuration = insertConfiguration
+        insertCurrentResultButton.accessibilityLabel = "插入当前识别结果"
+        insertCurrentResultButton.accessibilityHint = isTranscribing
+            ? "使用当前识别结果，无需等待最终整理"
+            : "插入当前实时识别结果"
+
         var finishConfiguration = finishRecordingButton.configuration
         if isRecording {
             finishConfiguration?.title = isAwaitingCommand ? "正在完成…" : "完成"
@@ -2436,6 +2489,11 @@ final class KeyboardViewController: UIInputViewController,
             finishRecordingButton.accessibilityLabel = isAwaitingCommand
                 ? "正在完成语音输入"
                 : "完成语音输入"
+        } else if canInsertCurrentResult {
+            finishConfiguration?.title = "整理中"
+            finishConfiguration?.image = nil
+            finishRecordingButton.isEnabled = false
+            finishRecordingButton.accessibilityLabel = "正在整理语音识别结果，可先插入当前结果"
         } else {
             finishConfiguration?.title = "正在整理…"
             finishConfiguration?.image = nil
@@ -2490,6 +2548,61 @@ final class KeyboardViewController: UIInputViewController,
             ])
         }
         return components.url
+    }
+
+    @objc private func insertCurrentVoiceResult() {
+        let snapshot = SharedCommandStore.latestRecordingSnapshot()
+        let now = Date().timeIntervalSince1970
+        let snapshotAge = now - snapshot.updatedAt
+        guard snapshotAge >= -0.5, snapshotAge < 1.5 else {
+            showTransientVoiceStatus(
+                "当前识别结果暂时不可用",
+                color: .systemRed,
+                duration: 1.8,
+                now: now
+            )
+            return
+        }
+
+        let liveTranscript = snapshot.transcript.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !liveTranscript.isEmpty else {
+            showTransientVoiceStatus(
+                "还没有可插入的识别结果",
+                color: .systemOrange,
+                duration: 1.5,
+                now: now
+            )
+            return
+        }
+
+        let fingerprint = "\(snapshot.updatedAt)|\(liveTranscript)"
+        guard fingerprint != lastManualInsertFingerprint else {
+            showTransientVoiceStatus(
+                "当前结果已插入",
+                color: .secondaryLabel,
+                duration: 1.2,
+                now: now
+            )
+            return
+        }
+
+        textDocumentProxy.insertText(liveTranscript)
+        hasManuallyInsertedCurrentVoiceResult = true
+        lastManualInsertFingerprint = fingerprint
+        SharedCommandStore.markKeyboardManualInsertConsumed()
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "recognition_manual_insert_text_called",
+            detail: "chars=\(liveTranscript.count) recording=\(snapshot.isRecording ? 1 : 0) transcribing=\(snapshot.isTranscribing ? 1 : 0)"
+        )
+        showTransientVoiceStatus(
+            "已插入当前结果",
+            color: .systemGreen,
+            duration: 1.2,
+            now: now
+        )
+        refreshRecordingSnapshot()
     }
 
     private func insertRecognitionResultIfNeeded(
