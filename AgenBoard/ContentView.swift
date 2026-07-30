@@ -1109,7 +1109,8 @@ struct ContentView: View {
             }
         case .stop:
             recorder.stopRecordingAndTranscribeIfNeeded(
-                deliverResultToKeyboard: true
+                deliverResultToKeyboard: true,
+                request: request
             )
             SharedCommandStore.updateRecordingRequestResponse(
                 for: request,

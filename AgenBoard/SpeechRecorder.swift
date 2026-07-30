@@ -21,6 +21,7 @@ final class SpeechRecorder: ObservableObject {
         let activeHotwords: [String]
         let configuredHotwordCount: Int
         let launchRequest: SharedRecordingToggleRequest?
+        let deliveryRequest: SharedRecordingToggleRequest?
         let realtimeSession: AliyunRealtimeSpeechSession?
         let realtimeAudioSendingTask: Task<Void, Error>?
         let realtimeVocabulary: AliyunVocabularySetup?
@@ -149,14 +150,16 @@ final class SpeechRecorder: ObservableObject {
     }
 
     func stopRecordingAndTranscribeIfNeeded(
-        deliverResultToKeyboard: Bool? = nil
+        deliverResultToKeyboard: Bool? = nil,
+        request: SharedRecordingToggleRequest? = nil
     ) {
         guard isRecording else {
             return
         }
 
         stopRecordingAndTranscribe(
-            deliverResultToKeyboard: deliverResultToKeyboard
+            deliverResultToKeyboard: deliverResultToKeyboard,
+            deliveryRequest: request
         )
     }
 
@@ -902,7 +905,8 @@ final class SpeechRecorder: ObservableObject {
     }
 
     private func stopRecordingAndTranscribe(
-        deliverResultToKeyboard: Bool? = nil
+        deliverResultToKeyboard: Bool? = nil,
+        deliveryRequest: SharedRecordingToggleRequest? = nil
     ) {
         let segmentID = activeSegmentID ?? UUID()
         let sourceRecordingURL = recordingURL
@@ -990,6 +994,7 @@ final class SpeechRecorder: ObservableObject {
             activeHotwords: capturedActiveHotwords,
             configuredHotwordCount: capturedConfiguredHotwordCount,
             launchRequest: capturedLaunchRequest,
+            deliveryRequest: deliveryRequest,
             realtimeSession: capturedRealtimeSession,
             realtimeAudioSendingTask: capturedAudioSendingTask,
             realtimeVocabulary: capturedRealtimeVocabulary,
@@ -1438,9 +1443,23 @@ final class SpeechRecorder: ObservableObject {
         }
 
         let baseStatus = "识别完成 · \(provider.shortTitle)\(completionNote)"
+        if let deliveryRequest = job.deliveryRequest,
+           !normalizedTranscript.isEmpty {
+            SharedCommandStore.publishFinalizedSegmentResult(
+                segmentID: job.id.uuidString,
+                stopRequest: deliveryRequest,
+                text: normalizedTranscript
+            )
+        }
         let shouldDeliverResult = job.shouldDeliverResultToKeyboard
             && pendingKeyboardDeliveryJobID == job.id
             && isVisibleJob
+            && (job.deliveryRequest.map {
+                abs(
+                    SharedCommandStore.latestKeyboardAutoInsertRequestedAt()
+                        - $0.requestedAt
+                ) < 0.5
+            } ?? true)
         if normalizedTranscript.trimmingCharacters(
             in: .whitespacesAndNewlines
         ).isEmpty {

@@ -23,6 +23,14 @@ struct SharedRecognitionResult {
     let autoInsertRequestedAt: TimeInterval
 }
 
+struct SharedFinalizedSegmentResult {
+    let segmentID: String
+    let stopRequestID: String
+    let stopRequestedAt: TimeInterval
+    let text: String
+    let createdAt: TimeInterval
+}
+
 enum SharedRecordingCommand: String {
     case start
     case stop
@@ -194,6 +202,13 @@ enum SharedCommandStore {
     private static let recognitionResultInsertedIDKey = "recognitionResultInsertedID"
     private static let recognitionResultInsertionAttemptedAtKey =
         "recognitionResultInsertionAttemptedAt"
+    private static let finalizedSegmentIDKey = "finalizedSegmentID"
+    private static let finalizedSegmentStopRequestIDKey =
+        "finalizedSegmentStopRequestID"
+    private static let finalizedSegmentStopRequestedAtKey =
+        "finalizedSegmentStopRequestedAt"
+    private static let finalizedSegmentTextKey = "finalizedSegmentText"
+    private static let finalizedSegmentCreatedAtKey = "finalizedSegmentCreatedAt"
     private static let keyboardAutoInsertRequestedAtKey = "keyboardAutoInsertRequestedAt"
     private static let keyboardAutoInsertPendingKey = "keyboardAutoInsertPending"
     private static let keyboardManualInsertConsumedAtKey =
@@ -993,6 +1008,57 @@ enum SharedCommandStore {
             autoInsertRequestedAt: defaults.double(
                 forKey: recognitionResultAutoInsertRequestedAtKey
             )
+        )
+    }
+
+    static func publishFinalizedSegmentResult(
+        segmentID: String,
+        stopRequest: SharedRecordingToggleRequest,
+        text: String
+    ) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty,
+              let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(segmentID, forKey: finalizedSegmentIDKey)
+        defaults.set(stopRequest.id, forKey: finalizedSegmentStopRequestIDKey)
+        defaults.set(
+            stopRequest.requestedAt,
+            forKey: finalizedSegmentStopRequestedAtKey
+        )
+        defaults.set(trimmedText, forKey: finalizedSegmentTextKey)
+        defaults.set(
+            Date().timeIntervalSince1970,
+            forKey: finalizedSegmentCreatedAtKey
+        )
+        defaults.synchronize()
+        recordKeyboardDiagnostic(
+            "finalized_segment_result_published",
+            detail: "segment=\(segmentID) stop=\(stopRequest.id) chars=\(trimmedText.count)"
+        )
+    }
+
+    static func latestFinalizedSegmentResult() -> SharedFinalizedSegmentResult? {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+              let segmentID = defaults.string(forKey: finalizedSegmentIDKey),
+              let stopRequestID = defaults.string(
+                  forKey: finalizedSegmentStopRequestIDKey
+              ),
+              let text = defaults.string(forKey: finalizedSegmentTextKey),
+              !text.isEmpty else {
+            return nil
+        }
+
+        return SharedFinalizedSegmentResult(
+            segmentID: segmentID,
+            stopRequestID: stopRequestID,
+            stopRequestedAt: defaults.double(
+                forKey: finalizedSegmentStopRequestedAtKey
+            ),
+            text: text,
+            createdAt: defaults.double(forKey: finalizedSegmentCreatedAtKey)
         )
     }
 
