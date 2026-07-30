@@ -480,7 +480,8 @@ enum SharedCommandStore {
     static func requestRecordingCommand(
         _ command: SharedRecordingCommand,
         requiresForegroundRoundTrip: Bool = true,
-        sourceHost: SharedKeyboardHostCapture? = nil
+        sourceHost: SharedKeyboardHostCapture? = nil,
+        suppressAutomaticInsertion: Bool = false
     ) -> SharedRecordingToggleRequest? {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return nil
@@ -531,6 +532,12 @@ enum SharedCommandStore {
             defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
             defaults.removeObject(forKey: keyboardManualInsertConsumedAtKey)
             defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+        } else if suppressAutomaticInsertion {
+            // The keyboard already inserted the live draft. Keep publishing the
+            // finalized result, but never auto-insert it as a duplicate.
+            defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
+            defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+            defaults.set(requestedAt, forKey: keyboardManualInsertConsumedAtKey)
         } else {
             // Stopping should preserve a manual insert that already happened while
             // the user was still recording; otherwise the final result would be

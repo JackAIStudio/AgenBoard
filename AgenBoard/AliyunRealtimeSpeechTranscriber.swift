@@ -610,9 +610,11 @@ final class AliyunRealtimeSpeechSession {
 
 final class AliyunRealtimeAudioCapture: @unchecked Sendable {
     typealias MeterHandler = @MainActor @Sendable (Double, TimeInterval) -> Void
+    typealias AudioBufferHandler = (AVAudioPCMBuffer) -> Void
 
     private let engine = AVAudioEngine()
-    private let audioContinuation: AsyncStream<Data>.Continuation
+    private let audioContinuation: AsyncStream<Data>.Continuation?
+    private let audioBufferHandler: AudioBufferHandler?
     private let meterHandler: MeterHandler
     private let stateLock = NSLock()
     private var audioFile: AVAudioFile?
@@ -629,10 +631,12 @@ final class AliyunRealtimeAudioCapture: @unchecked Sendable {
 
     init(
         fileURL: URL,
-        audioContinuation: AsyncStream<Data>.Continuation,
+        audioContinuation: AsyncStream<Data>.Continuation? = nil,
+        audioBufferHandler: AudioBufferHandler? = nil,
         meterHandler: @escaping MeterHandler
     ) throws {
         self.audioContinuation = audioContinuation
+        self.audioBufferHandler = audioBufferHandler
         self.meterHandler = meterHandler
 
         let settings: [String: Any] = [
@@ -692,7 +696,7 @@ final class AliyunRealtimeAudioCapture: @unchecked Sendable {
         converter = nil
         outputFormat = nil
         stateLock.unlock()
-        audioContinuation.finish()
+        audioContinuation?.finish()
     }
 
     private func process(_ inputBuffer: AVAudioPCMBuffer) {
@@ -756,7 +760,8 @@ final class AliyunRealtimeAudioCapture: @unchecked Sendable {
         let duration = Double(totalOutputFrames) / outputFormat.sampleRate
         let rms = sqrt(squareSum / Double(max(1, frameLength)))
         let decibels = max(-80, 20 * log10(max(rms, 0.000_1)))
-        audioContinuation.yield(pcm.withUnsafeBytes { Data($0) })
+        audioContinuation?.yield(pcm.withUnsafeBytes { Data($0) })
+        audioBufferHandler?(outputBuffer)
         Task { @MainActor [meterHandler] in
             meterHandler(decibels, duration)
         }
