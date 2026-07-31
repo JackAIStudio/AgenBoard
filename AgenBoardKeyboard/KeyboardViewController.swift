@@ -108,12 +108,10 @@ final class KeyboardViewController: UIInputViewController,
     private var recordingButtonCenterYConstraint: NSLayoutConstraint?
     private var statusLabelIdleConstraints: [NSLayoutConstraint] = []
     private weak var recordingLevelView: KeyboardAudioLevelView?
-    private weak var liveTranscriptLabel: UILabel?
-    private weak var recordingCompletionHintLabel: UILabel?
+    private weak var liveTranscriptView: UITextView?
     private weak var voiceActivityRow: UIStackView?
     private weak var voiceActivityLabel: UILabel?
     private weak var voiceActivityActionButton: UIButton?
-    private var voiceIdleControls: [UIView] = []
     private var isShowingVoiceTaskControls = false
     private var keyboardHeightConstraint: NSLayoutConstraint?
     private weak var cursorTrackingButton: UIButton?
@@ -474,8 +472,10 @@ final class KeyboardViewController: UIInputViewController,
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         statusLabel.textColor = .secondaryLabel
         statusLabel.textAlignment = .center
-        statusLabel.numberOfLines = 3
-        statusLabel.lineBreakMode = .byTruncatingHead
+        statusLabel.numberOfLines = 1
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.adjustsFontSizeToFitWidth = true
+        statusLabel.minimumScaleFactor = 0.8
         statusLabel.clipsToBounds = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.isUserInteractionEnabled = true
@@ -567,34 +567,37 @@ final class KeyboardViewController: UIInputViewController,
         canvas.addSubview(activityRow)
         self.voiceActivityRow = activityRow
 
-        let completionHintLabel = UILabel()
-        completionHintLabel.text = "再次点击以完成"
-        completionHintLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        completionHintLabel.textColor = .tertiaryLabel
-        completionHintLabel.textAlignment = .center
-        completionHintLabel.isHidden = true
-        completionHintLabel.translatesAutoresizingMaskIntoConstraints = false
-        canvas.addSubview(completionHintLabel)
-        self.recordingCompletionHintLabel = completionHintLabel
-
-        let liveTranscriptLabel = UILabel()
-        liveTranscriptLabel.text = "正在聆听…"
-        liveTranscriptLabel.font = .systemFont(ofSize: 15, weight: .medium)
-        liveTranscriptLabel.textColor = .secondaryLabel
-        liveTranscriptLabel.textAlignment = .center
-        liveTranscriptLabel.numberOfLines = 2
-        liveTranscriptLabel.lineBreakMode = .byTruncatingHead
-        liveTranscriptLabel.isHidden = true
-        liveTranscriptLabel.accessibilityTraits = .updatesFrequently
-        liveTranscriptLabel.translatesAutoresizingMaskIntoConstraints = false
-        canvas.addSubview(liveTranscriptLabel)
-        self.liveTranscriptLabel = liveTranscriptLabel
+        let liveTranscriptView = UITextView()
+        liveTranscriptView.text = "正在聆听…"
+        liveTranscriptView.font = .systemFont(ofSize: 13, weight: .medium)
+        liveTranscriptView.textColor = .secondaryLabel
+        liveTranscriptView.textAlignment = .center
+        liveTranscriptView.backgroundColor = .secondarySystemBackground
+        liveTranscriptView.layer.cornerRadius = 10
+        liveTranscriptView.layer.cornerCurve = .continuous
+        liveTranscriptView.clipsToBounds = true
+        liveTranscriptView.isEditable = false
+        liveTranscriptView.isSelectable = false
+        liveTranscriptView.isScrollEnabled = true
+        liveTranscriptView.showsVerticalScrollIndicator = false
+        liveTranscriptView.textContainerInset = .init(
+            top: 1,
+            left: 8,
+            bottom: 1,
+            right: 8
+        )
+        liveTranscriptView.textContainer.lineFragmentPadding = 0
+        liveTranscriptView.isHidden = true
+        liveTranscriptView.accessibilityTraits = .updatesFrequently
+        liveTranscriptView.translatesAutoresizingMaskIntoConstraints = false
+        canvas.addSubview(liveTranscriptView)
+        self.liveTranscriptView = liveTranscriptView
 
         let returnButton = makeVoiceUtilityButton(
             systemImage: "return",
             accessibilityLabel: "回车键",
             action: #selector(insertReturn),
-            width: 112
+            width: nil
         )
         let deleteButton = makeVoiceDeleteButton()
         let commaButton = makeVoiceUtilityButton(
@@ -613,7 +616,7 @@ final class KeyboardViewController: UIInputViewController,
             systemImage: "space",
             accessibilityLabel: "空格",
             action: #selector(insertSpace),
-            width: 112
+            width: nil
         )
         spaceButton.accessibilityHint = "轻点输入空格，长按并拖动可移动光标"
         configureCursorTracking(on: spaceButton)
@@ -627,10 +630,9 @@ final class KeyboardViewController: UIInputViewController,
 
         [commaButton, deleteButton, atButton, textInputButtonRow]
             .forEach(canvas.addSubview)
-        voiceIdleControls = [textInputButtonRow]
 
-        let widthConstraint = recordingButton.widthAnchor.constraint(equalToConstant: 128)
-        let heightConstraint = recordingButton.heightAnchor.constraint(equalToConstant: 56)
+        let widthConstraint = recordingButton.widthAnchor.constraint(equalToConstant: 120)
+        let heightConstraint = recordingButton.heightAnchor.constraint(equalToConstant: 48)
         recordingButtonWidthConstraint = widthConstraint
         recordingButtonHeightConstraint = heightConstraint
 
@@ -647,20 +649,20 @@ final class KeyboardViewController: UIInputViewController,
         let statusIdleConstraints = [
             statusLabel.bottomAnchor.constraint(
                 equalTo: recordingButton.topAnchor,
-                constant: -8
+                constant: -4
             )
         ]
         self.statusLabelIdleConstraints = statusIdleConstraints
         let centerYConstraint = recordingButton.centerYAnchor.constraint(
             equalTo: canvas.topAnchor,
-            constant: 70
+            constant: 44
         )
         recordingButtonCenterYConstraint = centerYConstraint
 
         NSLayoutConstraint.activate(statusHorizontalConstraints)
         NSLayoutConstraint.activate(statusIdleConstraints)
         NSLayoutConstraint.activate([
-            canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 184),
+            canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 160),
             statusLabel.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
 
             recordingButton.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
@@ -668,70 +670,66 @@ final class KeyboardViewController: UIInputViewController,
             widthConstraint,
             heightConstraint,
 
-            activityRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            activityRow.bottomAnchor.constraint(
-                equalTo: recordingButton.topAnchor,
-                constant: -6
-            ),
             activityRow.heightAnchor.constraint(equalToConstant: 28),
+            activityRow.centerYAnchor.constraint(
+                equalTo: liveTranscriptView.centerYAnchor
+            ),
             activityRow.leadingAnchor.constraint(
-                greaterThanOrEqualTo: canvas.leadingAnchor,
+                equalTo: canvas.leadingAnchor,
                 constant: 16
             ),
             activityRow.trailingAnchor.constraint(
-                lessThanOrEqualTo: canvas.trailingAnchor,
-                constant: -16
-            ),
-
-            completionHintLabel.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            completionHintLabel.topAnchor.constraint(
-                equalTo: liveTranscriptLabel.bottomAnchor,
-                constant: 3
-            ),
-            completionHintLabel.bottomAnchor.constraint(
-                lessThanOrEqualTo: canvas.bottomAnchor,
-                constant: -6
-            ),
-
-            liveTranscriptLabel.topAnchor.constraint(
-                equalTo: recordingButton.bottomAnchor,
-                constant: 12
-            ),
-            liveTranscriptLabel.leadingAnchor.constraint(
-                equalTo: canvas.leadingAnchor,
-                constant: 28
-            ),
-            liveTranscriptLabel.trailingAnchor.constraint(
-                equalTo: canvas.trailingAnchor,
-                constant: -28
-            ),
-
-            textInputButtonRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            textInputButtonRow.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 144),
-            textInputButtonRow.topAnchor.constraint(
-                greaterThanOrEqualTo: statusLabel.bottomAnchor,
-                constant: 4
-            ),
-            textInputButtonRow.bottomAnchor.constraint(
-                lessThanOrEqualTo: canvas.bottomAnchor,
+                equalTo: deleteButton.leadingAnchor,
                 constant: -10
             ),
 
-            commaButton.trailingAnchor.constraint(
-                equalTo: textInputButtonRow.leadingAnchor,
-                constant: -9
+            liveTranscriptView.topAnchor.constraint(
+                equalTo: canvas.topAnchor,
+                constant: 78
+            ),
+            liveTranscriptView.leadingAnchor.constraint(
+                equalTo: textInputButtonRow.leadingAnchor
+            ),
+            liveTranscriptView.trailingAnchor.constraint(
+                equalTo: textInputButtonRow.trailingAnchor
+            ),
+            liveTranscriptView.bottomAnchor.constraint(
+                equalTo: textInputButtonRow.topAnchor,
+                constant: -4
+            ),
+
+            textInputButtonRow.leadingAnchor.constraint(
+                equalTo: commaButton.trailingAnchor,
+                constant: 10
+            ),
+            textInputButtonRow.trailingAnchor.constraint(
+                equalTo: deleteButton.leadingAnchor,
+                constant: -10
+            ),
+            textInputButtonRow.topAnchor.constraint(
+                equalTo: canvas.topAnchor,
+                constant: 116
+            ),
+            textInputButtonRow.bottomAnchor.constraint(
+                lessThanOrEqualTo: canvas.bottomAnchor,
+                constant: 0
+            ),
+
+            commaButton.leadingAnchor.constraint(
+                equalTo: canvas.leadingAnchor,
+                constant: 12
             ),
             commaButton.centerYAnchor.constraint(
                 equalTo: recordingButton.centerYAnchor,
-                constant: 15
+                constant: 10
             ),
-            deleteButton.leadingAnchor.constraint(
-                equalTo: textInputButtonRow.trailingAnchor,
-                constant: 9
+            deleteButton.trailingAnchor.constraint(
+                equalTo: canvas.trailingAnchor,
+                constant: -12
             ),
             deleteButton.centerYAnchor.constraint(
                 equalTo: recordingButton.centerYAnchor,
-                constant: 15
+                constant: 10
             ),
             atButton.centerXAnchor.constraint(equalTo: deleteButton.centerXAnchor),
             atButton.topAnchor.constraint(equalTo: deleteButton.bottomAnchor, constant: 8)
@@ -790,7 +788,7 @@ final class KeyboardViewController: UIInputViewController,
         systemImage: String? = nil,
         accessibilityLabel: String,
         action: Selector,
-        width: CGFloat = 46,
+        width: CGFloat? = 46,
         style: VoiceUtilityButtonStyle = .primary
     ) -> UIButton {
         var configuration = UIButton.Configuration.filled()
@@ -813,10 +811,10 @@ final class KeyboardViewController: UIInputViewController,
         button.addTarget(self, action: action, for: .touchUpInside)
         addHapticFeedback(to: button)
         button.accessibilityLabel = accessibilityLabel
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: width),
-            button.heightAnchor.constraint(equalToConstant: 44)
-        ])
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        if let width {
+            button.widthAnchor.constraint(equalToConstant: width).isActive = true
+        }
         return button
     }
 
@@ -2405,15 +2403,7 @@ final class KeyboardViewController: UIInputViewController,
             in: .whitespacesAndNewlines
         )
         if isActive {
-            liveTranscriptLabel?.text = liveTranscript.isEmpty
-                ? "正在聆听…"
-                : liveTranscript
-            liveTranscriptLabel?.textColor = liveTranscript.isEmpty
-                ? .secondaryLabel
-                : .label
-            liveTranscriptLabel?.accessibilityLabel = liveTranscript.isEmpty
-                ? "正在聆听"
-                : "实时识别：\(liveTranscript)"
+            updateLiveTranscript(liveTranscript)
             if !liveTranscript.isEmpty,
                !didRenderLiveTranscriptForCurrentSegment {
                 didRenderLiveTranscriptForCurrentSegment = true
@@ -2612,6 +2602,7 @@ final class KeyboardViewController: UIInputViewController,
             setVoiceActivityActionTitle(nil)
         }
 
+        showsRow = showsRow && !isRecording
         activityRow.isHidden = !showsRow
         if showsRow {
             statusLabel.isHidden = true
@@ -2700,15 +2691,13 @@ final class KeyboardViewController: UIInputViewController,
             ? "正在录音"
             : nil
         recordingButton.layer.cornerCurve = .continuous
-        recordingButton.layer.cornerRadius = isRecording ? 52 : 28
+        recordingButton.layer.cornerRadius = isRecording ? 32 : 24
         recordingButton.layer.borderWidth = isRecording ? 4 : 0
         recordingButton.layer.borderColor = UIColor.systemGray4.cgColor
         recordingLevelView?.isHidden = !isRecording
 
         statusLabel.isHidden = isRecording
-        liveTranscriptLabel?.isHidden = !isRecording
-        statusLabel.numberOfLines = isRecording ? 2 : 3
-        recordingCompletionHintLabel?.isHidden = !isRecording
+        liveTranscriptView?.isHidden = !isRecording
 
         if isRecording && isAwaitingStopCommand {
             recordingButton.accessibilityLabel = "正在结束当前语音"
@@ -2735,9 +2724,9 @@ final class KeyboardViewController: UIInputViewController,
             recordingButton.bringSubviewToFront(recordingLevelView)
         }
         updateRecordingButtonSize(
-            width: isRecording ? 104 : 128,
-            height: isRecording ? 104 : 56,
-            centerY: isRecording ? 92 : 70
+            width: isRecording ? 64 : 120,
+            height: isRecording ? 64 : 48,
+            centerY: 44
         )
     }
 
@@ -2788,22 +2777,34 @@ final class KeyboardViewController: UIInputViewController,
             isShowingVoiceTaskControls = isTaskActive
             stopDeleting()
             endCursorTracking(refreshSnapshot: false)
-            statusLabel.font = isTaskActive
-                ? .systemFont(ofSize: 15, weight: .medium)
-                : .systemFont(ofSize: 13, weight: .medium)
-            voiceIdleControls.forEach { $0.isHidden = isTaskActive }
-            UIView.animate(
-                withDuration: 0.2,
-                delay: 0,
-                options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
-            ) {
-                self.view.layoutIfNeeded()
-            }
         }
 
         recordingLevelView?.update(level: audioLevel, isActive: isRecording)
         voiceActivityRow?.isHidden = true
-        recordingCompletionHintLabel?.text = "再次点击，插入并结束本段"
+    }
+
+    private func updateLiveTranscript(_ transcript: String) {
+        guard let liveTranscriptView else {
+            return
+        }
+
+        let isEmpty = transcript.isEmpty
+        let displayedText = isEmpty ? "正在聆听…" : transcript
+        liveTranscriptView.textColor = isEmpty ? .secondaryLabel : .label
+        liveTranscriptView.textAlignment = isEmpty ? .center : .natural
+        liveTranscriptView.accessibilityLabel = isEmpty
+            ? "正在聆听"
+            : "实时识别：\(transcript)"
+
+        guard liveTranscriptView.text != displayedText else {
+            return
+        }
+
+        liveTranscriptView.text = displayedText
+        liveTranscriptView.layoutIfNeeded()
+        liveTranscriptView.scrollRangeToVisible(
+            NSRange(location: liveTranscriptView.textStorage.length, length: 0)
+        )
     }
 
     private func updateRecordingButtonSize(
