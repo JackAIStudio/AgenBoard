@@ -75,9 +75,14 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
     var lastErrorMode: RecognitionHotwordMode?
     var lastErrorProvider: SpeechRecognitionProvider?
     var recordingAvailable: Bool? = nil
+    var finalizationPending: Bool? = nil
 
     var hasRecording: Bool {
         recordingAvailable ?? true
+    }
+
+    var isFinalizationPending: Bool {
+        finalizationPending ?? false
     }
 
     func transcript(for mode: RecognitionHotwordMode) -> String? {
@@ -227,6 +232,7 @@ final class RecognitionHistoryStore: ObservableObject {
         let attachedLegacyTranscript = attachLatestLegacyTranscriptIfPossible()
         changed = attachedLegacyTranscript || changed
         changed = backfillOriginalResults() || changed
+        changed = recoverInterruptedFinalizations() || changed
         sortItems()
 
         if changed {
@@ -248,6 +254,19 @@ final class RecognitionHistoryStore: ObservableObject {
 
     var latestItem: RecognitionHistoryItem? {
         items.first
+    }
+
+    private func recoverInterruptedFinalizations() -> Bool {
+        var changed = false
+        for index in items.indices where items[index].isFinalizationPending {
+            items[index].finalizationPending = false
+            items[index].lastError =
+                "上次后台整理被系统中断；录音和已有文字已保留，可重新转写。"
+            items[index].lastErrorMode = items[index].originalMode
+            items[index].lastErrorProvider = items[index].originalProvider
+            changed = true
+        }
+        return changed
     }
 
     func item(id: UUID) -> RecognitionHistoryItem? {
@@ -369,6 +388,33 @@ final class RecognitionHistoryStore: ObservableObject {
         items[index].lastError = nil
         items[index].lastErrorMode = nil
         items[index].lastErrorProvider = nil
+        items[index].finalizationPending = false
+        try persist()
+        storageMessage = ""
+    }
+
+    func storeTranscriptionSnapshot(
+        itemID: UUID,
+        mode: RecognitionHotwordMode,
+        transcript: String
+    ) throws {
+        let normalized = SpeechTranscriptNormalizer.normalize(transcript)
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+            throw RecognitionHistoryError.missingItem
+        }
+
+        if !normalized.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty {
+            switch mode {
+            case .withHotwords:
+                items[index].transcriptWithHotwords = normalized
+            case .withoutHotwords:
+                items[index].transcriptWithoutHotwords = normalized
+            }
+        }
+        items[index].finalizationPending = true
+
         try persist()
         storageMessage = ""
     }
@@ -386,6 +432,7 @@ final class RecognitionHistoryStore: ObservableObject {
         items[index].lastError = message
         items[index].lastErrorMode = mode
         items[index].lastErrorProvider = provider
+        items[index].finalizationPending = false
 
         do {
             try persist()

@@ -6,6 +6,7 @@ final class KeyboardViewController: UIInputViewController,
     private static let pinyinCandidatePageSize = 48
     private static let pinyinCandidateCellIdentifier = "PinyinCandidateCell"
     private static let automaticInsertionValidity: TimeInterval = 15 * 60
+    private static let finalizationPromptDelay: TimeInterval = 0.65
     private enum ContentModule: Int {
         case voice = 0
         case phrases = 1
@@ -65,6 +66,31 @@ final class KeyboardViewController: UIInputViewController,
         }
     }
 
+    private enum VoiceFinalizationResolution {
+        case waiting
+        case realtimeCommitted
+        case detached
+        case finalInserted
+    }
+
+    private enum VoiceActivityAction {
+        case useRealtime(stopRequestID: String)
+        case copyFinal(stopRequestID: String)
+    }
+
+    private struct VoiceFinalizationDecision {
+        let stopRequestID: String
+        let stopRequestedAt: TimeInterval
+        let rawText: String
+        let contextBeforeSuffix: String
+        let contextAfterPrefix: String
+        var resolution: VoiceFinalizationResolution
+        var finalText: String?
+        var finalizedSegmentID: String?
+        var copiedFinalText = false
+        var finalizationFailed = false
+    }
+
     private let rootStack = UIStackView()
     private weak var headerRow: UIView?
     private let headerLeadingContainer = UIView()
@@ -79,15 +105,13 @@ final class KeyboardViewController: UIInputViewController,
     private var recordingButton: UIButton?
     private var recordingButtonWidthConstraint: NSLayoutConstraint?
     private var recordingButtonHeightConstraint: NSLayoutConstraint?
+    private var recordingButtonCenterYConstraint: NSLayoutConstraint?
+    private var statusLabelIdleConstraints: [NSLayoutConstraint] = []
     private weak var recordingLevelView: KeyboardAudioLevelView?
-    private weak var cancelRecordingButton: UIButton?
-    private weak var finishRecordingButton: UIButton?
+    private weak var liveTranscriptView: UITextView?
     private weak var voiceActivityRow: UIStackView?
     private weak var voiceActivityLabel: UILabel?
-    private weak var voiceActiveActionRow: UIStackView?
-    private var voiceIdleControls: [UIView] = []
-    private var statusLabelIdleConstraints: [NSLayoutConstraint] = []
-    private var statusLabelActiveConstraints: [NSLayoutConstraint] = []
+    private weak var voiceActivityActionButton: UIButton?
     private var isShowingVoiceTaskControls = false
     private var keyboardHeightConstraint: NSLayoutConstraint?
     private weak var cursorTrackingButton: UIButton?
@@ -123,7 +147,11 @@ final class KeyboardViewController: UIInputViewController,
     private var hapticsEnabled = true
     private var wasPreparingVoiceInput = false
     private var wasRecordingVoiceInput = false
+    private var didRenderLiveTranscriptForCurrentSegment = false
     private var lastHandledRecognitionResultID: String?
+    private var voiceFinalizationDecisions: [VoiceFinalizationDecision] = []
+    private var voiceActivityAction: VoiceActivityAction?
+    private var lastObservedFinalizedSegmentID: String?
     private var lastInsertionDiagnosticState: String?
     private var retryableRecognitionResultID: String?
     private var insertionMessageUntil: TimeInterval = 0
@@ -444,8 +472,10 @@ final class KeyboardViewController: UIInputViewController,
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         statusLabel.textColor = .secondaryLabel
         statusLabel.textAlignment = .center
-        statusLabel.numberOfLines = 3
-        statusLabel.lineBreakMode = .byTruncatingHead
+        statusLabel.numberOfLines = 1
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.adjustsFontSizeToFitWidth = true
+        statusLabel.minimumScaleFactor = 0.8
         statusLabel.clipsToBounds = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.isUserInteractionEnabled = true
@@ -469,43 +499,105 @@ final class KeyboardViewController: UIInputViewController,
 
         let recordingButton = UIButton(configuration: recordingConfiguration)
         recordingButton.translatesAutoresizingMaskIntoConstraints = false
+        recordingButton.clipsToBounds = true
         recordingButton.addTarget(self, action: #selector(toggleRecording), for: .touchUpInside)
         addHapticFeedback(to: recordingButton, intensity: 0.8)
         recordingButton.accessibilityLabel = "开始语音输入"
-        recordingButton.accessibilityHint = "轻点开始录音，再次轻点完成"
+        recordingButton.accessibilityHint = "轻点开始录音，再次轻点结束本段"
         canvas.addSubview(recordingButton)
         self.recordingButton = recordingButton
 
         let recordingLevelView = KeyboardAudioLevelView()
         recordingLevelView.translatesAutoresizingMaskIntoConstraints = false
         recordingLevelView.isUserInteractionEnabled = false
+        recordingLevelView.isHidden = true
+        recordingButton.addSubview(recordingLevelView)
         self.recordingLevelView = recordingLevelView
+        NSLayoutConstraint.activate([
+            recordingLevelView.centerXAnchor.constraint(
+                equalTo: recordingButton.centerXAnchor
+            ),
+            recordingLevelView.centerYAnchor.constraint(
+                equalTo: recordingButton.centerYAnchor
+            ),
+            recordingLevelView.widthAnchor.constraint(equalToConstant: 44),
+            recordingLevelView.heightAnchor.constraint(equalToConstant: 30)
+        ])
 
         let activityLabel = UILabel()
-        activityLabel.text = "正在聆听"
+        activityLabel.text = "上一段整理中"
         activityLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         activityLabel.textColor = .secondaryLabel
         activityLabel.accessibilityTraits = .updatesFrequently
         self.voiceActivityLabel = activityLabel
 
-        let activityRow = UIStackView(arrangedSubviews: [recordingLevelView, activityLabel])
+        var activityActionConfiguration = UIButton.Configuration.gray()
+        activityActionConfiguration.title = "立即使用实时稿"
+        activityActionConfiguration.baseForegroundColor = .label
+        activityActionConfiguration.cornerStyle = .capsule
+        activityActionConfiguration.contentInsets = NSDirectionalEdgeInsets(
+            top: 5,
+            leading: 10,
+            bottom: 5,
+            trailing: 10
+        )
+        let activityActionButton = UIButton(
+            configuration: activityActionConfiguration
+        )
+        activityActionButton.titleLabel?.font = .systemFont(
+            ofSize: 12,
+            weight: .semibold
+        )
+        activityActionButton.addTarget(
+            self,
+            action: #selector(performVoiceActivityAction),
+            for: .touchUpInside
+        )
+        addHapticFeedback(to: activityActionButton, intensity: 0.6)
+        self.voiceActivityActionButton = activityActionButton
+
+        let activityRow = UIStackView(
+            arrangedSubviews: [activityLabel, activityActionButton]
+        )
         activityRow.axis = .horizontal
         activityRow.alignment = .center
-        activityRow.spacing = 6
+        activityRow.spacing = 8
         activityRow.translatesAutoresizingMaskIntoConstraints = false
         activityRow.isHidden = true
         canvas.addSubview(activityRow)
         self.voiceActivityRow = activityRow
-        NSLayoutConstraint.activate([
-            recordingLevelView.widthAnchor.constraint(equalToConstant: 48),
-            recordingLevelView.heightAnchor.constraint(equalToConstant: 26)
-        ])
+
+        let liveTranscriptView = UITextView()
+        liveTranscriptView.text = "正在聆听…"
+        liveTranscriptView.font = .systemFont(ofSize: 13, weight: .medium)
+        liveTranscriptView.textColor = .secondaryLabel
+        liveTranscriptView.textAlignment = .center
+        liveTranscriptView.backgroundColor = .secondarySystemBackground
+        liveTranscriptView.layer.cornerRadius = 10
+        liveTranscriptView.layer.cornerCurve = .continuous
+        liveTranscriptView.clipsToBounds = true
+        liveTranscriptView.isEditable = false
+        liveTranscriptView.isSelectable = false
+        liveTranscriptView.isScrollEnabled = true
+        liveTranscriptView.showsVerticalScrollIndicator = false
+        liveTranscriptView.textContainerInset = .init(
+            top: 1,
+            left: 8,
+            bottom: 1,
+            right: 8
+        )
+        liveTranscriptView.textContainer.lineFragmentPadding = 0
+        liveTranscriptView.isHidden = true
+        liveTranscriptView.accessibilityTraits = .updatesFrequently
+        liveTranscriptView.translatesAutoresizingMaskIntoConstraints = false
+        canvas.addSubview(liveTranscriptView)
+        self.liveTranscriptView = liveTranscriptView
 
         let returnButton = makeVoiceUtilityButton(
             systemImage: "return",
             accessibilityLabel: "回车键",
             action: #selector(insertReturn),
-            width: 112
+            width: nil
         )
         let deleteButton = makeVoiceDeleteButton()
         let commaButton = makeVoiceUtilityButton(
@@ -514,17 +606,6 @@ final class KeyboardViewController: UIInputViewController,
             action: #selector(insertComma),
             style: .secondary
         )
-        let cancelButton = makeVoiceUtilityButton(
-            title: "取消",
-            accessibilityLabel: "取消当前语音识别",
-            action: #selector(cancelCurrentRecognition),
-            width: 116,
-            style: .secondary
-        )
-        var cancelConfiguration = cancelButton.configuration
-        cancelConfiguration?.baseForegroundColor = .systemRed
-        cancelButton.configuration = cancelConfiguration
-        self.cancelRecordingButton = cancelButton
         let atButton = makeVoiceUtilityButton(
             title: "@",
             accessibilityLabel: "艾特符号",
@@ -535,34 +616,10 @@ final class KeyboardViewController: UIInputViewController,
             systemImage: "space",
             accessibilityLabel: "空格",
             action: #selector(insertSpace),
-            width: 112
+            width: nil
         )
         spaceButton.accessibilityHint = "轻点输入空格，长按并拖动可移动光标"
         configureCursorTracking(on: spaceButton)
-
-        let finishButton = makeVoiceUtilityButton(
-            title: "完成",
-            systemImage: "stop.fill",
-            accessibilityLabel: "完成语音输入",
-            action: #selector(toggleRecording),
-            width: 116
-        )
-        var finishConfiguration = finishButton.configuration
-        finishConfiguration?.imagePadding = 6
-        finishButton.configuration = finishConfiguration
-        self.finishRecordingButton = finishButton
-
-        let activeActionRow = UIStackView(
-            arrangedSubviews: [cancelButton, finishButton]
-        )
-        activeActionRow.axis = .horizontal
-        activeActionRow.alignment = .fill
-        activeActionRow.distribution = .fill
-        activeActionRow.spacing = 12
-        activeActionRow.translatesAutoresizingMaskIntoConstraints = false
-        activeActionRow.isHidden = true
-        canvas.addSubview(activeActionRow)
-        self.voiceActiveActionRow = activeActionRow
 
         let textInputButtonRow = UIStackView(arrangedSubviews: [spaceButton, returnButton])
         textInputButtonRow.axis = .horizontal
@@ -573,21 +630,13 @@ final class KeyboardViewController: UIInputViewController,
 
         [commaButton, deleteButton, atButton, textInputButtonRow]
             .forEach(canvas.addSubview)
-        voiceIdleControls = [
-            recordingButton,
-            commaButton,
-            deleteButton,
-            atButton,
-            textInputButtonRow
-        ]
 
-        let widthConstraint = recordingButton.widthAnchor.constraint(equalToConstant: 128)
-        let heightConstraint = recordingButton.heightAnchor.constraint(equalToConstant: 56)
+        let widthConstraint = recordingButton.widthAnchor.constraint(equalToConstant: 120)
+        let heightConstraint = recordingButton.heightAnchor.constraint(equalToConstant: 48)
         recordingButtonWidthConstraint = widthConstraint
         recordingButtonHeightConstraint = heightConstraint
 
-        let statusIdleConstraints = [
-            statusLabel.topAnchor.constraint(equalTo: recordingButton.bottomAnchor, constant: 4),
+        let statusHorizontalConstraints = [
             statusLabel.leadingAnchor.constraint(
                 greaterThanOrEqualTo: commaButton.trailingAnchor,
                 constant: 8
@@ -597,63 +646,90 @@ final class KeyboardViewController: UIInputViewController,
                 constant: -8
             )
         ]
-        let statusActiveConstraints = [
-            statusLabel.topAnchor.constraint(equalTo: activityRow.bottomAnchor, constant: 1),
-            statusLabel.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 14),
-            statusLabel.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -14),
+        let statusIdleConstraints = [
             statusLabel.bottomAnchor.constraint(
-                lessThanOrEqualTo: activeActionRow.topAnchor,
-                constant: -6
+                equalTo: recordingButton.topAnchor,
+                constant: -4
             )
         ]
         self.statusLabelIdleConstraints = statusIdleConstraints
-        self.statusLabelActiveConstraints = statusActiveConstraints
+        let centerYConstraint = recordingButton.centerYAnchor.constraint(
+            equalTo: canvas.topAnchor,
+            constant: 44
+        )
+        recordingButtonCenterYConstraint = centerYConstraint
 
+        NSLayoutConstraint.activate(statusHorizontalConstraints)
         NSLayoutConstraint.activate(statusIdleConstraints)
         NSLayoutConstraint.activate([
-            canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 184),
+            canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 160),
             statusLabel.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
 
             recordingButton.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            recordingButton.centerYAnchor.constraint(equalTo: canvas.topAnchor, constant: 28),
+            centerYConstraint,
             widthConstraint,
             heightConstraint,
 
-            activityRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            activityRow.topAnchor.constraint(equalTo: canvas.topAnchor),
             activityRow.heightAnchor.constraint(equalToConstant: 28),
-
-            activeActionRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            activeActionRow.bottomAnchor.constraint(equalTo: canvas.bottomAnchor, constant: -10),
-            activeActionRow.widthAnchor.constraint(equalToConstant: 244),
-            activeActionRow.heightAnchor.constraint(equalToConstant: 44),
-
-            textInputButtonRow.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
-            textInputButtonRow.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 144),
-            textInputButtonRow.topAnchor.constraint(
-                greaterThanOrEqualTo: statusLabel.bottomAnchor,
-                constant: 4
+            activityRow.centerYAnchor.constraint(
+                equalTo: liveTranscriptView.centerYAnchor
             ),
-            textInputButtonRow.bottomAnchor.constraint(
-                lessThanOrEqualTo: canvas.bottomAnchor,
+            activityRow.leadingAnchor.constraint(
+                equalTo: canvas.leadingAnchor,
+                constant: 16
+            ),
+            activityRow.trailingAnchor.constraint(
+                equalTo: deleteButton.leadingAnchor,
                 constant: -10
             ),
 
-            commaButton.trailingAnchor.constraint(
-                equalTo: textInputButtonRow.leadingAnchor,
-                constant: -9
+            liveTranscriptView.topAnchor.constraint(
+                equalTo: canvas.topAnchor,
+                constant: 78
+            ),
+            liveTranscriptView.leadingAnchor.constraint(
+                equalTo: textInputButtonRow.leadingAnchor
+            ),
+            liveTranscriptView.trailingAnchor.constraint(
+                equalTo: textInputButtonRow.trailingAnchor
+            ),
+            liveTranscriptView.bottomAnchor.constraint(
+                equalTo: textInputButtonRow.topAnchor,
+                constant: -4
+            ),
+
+            textInputButtonRow.leadingAnchor.constraint(
+                equalTo: commaButton.trailingAnchor,
+                constant: 10
+            ),
+            textInputButtonRow.trailingAnchor.constraint(
+                equalTo: deleteButton.leadingAnchor,
+                constant: -10
+            ),
+            textInputButtonRow.topAnchor.constraint(
+                equalTo: canvas.topAnchor,
+                constant: 116
+            ),
+            textInputButtonRow.bottomAnchor.constraint(
+                lessThanOrEqualTo: canvas.bottomAnchor,
+                constant: 0
+            ),
+
+            commaButton.leadingAnchor.constraint(
+                equalTo: canvas.leadingAnchor,
+                constant: 12
             ),
             commaButton.centerYAnchor.constraint(
                 equalTo: recordingButton.centerYAnchor,
-                constant: 15
+                constant: 10
             ),
-            deleteButton.leadingAnchor.constraint(
-                equalTo: textInputButtonRow.trailingAnchor,
-                constant: 9
+            deleteButton.trailingAnchor.constraint(
+                equalTo: canvas.trailingAnchor,
+                constant: -12
             ),
             deleteButton.centerYAnchor.constraint(
                 equalTo: recordingButton.centerYAnchor,
-                constant: 15
+                constant: 10
             ),
             atButton.centerXAnchor.constraint(equalTo: deleteButton.centerXAnchor),
             atButton.topAnchor.constraint(equalTo: deleteButton.bottomAnchor, constant: 8)
@@ -712,7 +788,7 @@ final class KeyboardViewController: UIInputViewController,
         systemImage: String? = nil,
         accessibilityLabel: String,
         action: Selector,
-        width: CGFloat = 46,
+        width: CGFloat? = 46,
         style: VoiceUtilityButtonStyle = .primary
     ) -> UIButton {
         var configuration = UIButton.Configuration.filled()
@@ -735,10 +811,10 @@ final class KeyboardViewController: UIInputViewController,
         button.addTarget(self, action: action, for: .touchUpInside)
         addHapticFeedback(to: button)
         button.accessibilityLabel = accessibilityLabel
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: width),
-            button.heightAnchor.constraint(equalToConstant: 44)
-        ])
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        if let width {
+            button.widthAnchor.constraint(equalToConstant: width).isActive = true
+        }
         return button
     }
 
@@ -1782,10 +1858,26 @@ final class KeyboardViewController: UIInputViewController,
             // app responsive. If the command is not acknowledged or completed,
             // verification below falls back to the foreground with the same ID.
             let command: SharedRecordingCommand = snapshot.isRecording ? .stop : .start
+            let liveDraft = snapshot.transcript.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            if command == .start {
+                commitLatestWaitingRealtimeDraft(
+                    now: now,
+                    reason: "start_next_segment"
+                )
+            }
             if let request = SharedCommandStore.requestRecordingCommand(
                 command,
-                requiresForegroundRoundTrip: false
+                requiresForegroundRoundTrip: false,
+                suppressAutomaticInsertion: false
             ) {
+                if command == .stop {
+                    appendVoiceFinalizationDecision(
+                        request: request,
+                        rawText: liveDraft
+                    )
+                }
                 RecordingLaunchMetrics.mark(
                     "keyboard_live_request_persisted",
                     request: request
@@ -1795,7 +1887,7 @@ final class KeyboardViewController: UIInputViewController,
                     detail: "id=\(request.id) \(diagnosticState)"
                 )
                 statusLabel.text = snapshot.isRecording
-                    ? "正在停止录音..."
+                    ? "正在生成最终文本…"
                     : "已发送录音请求"
                 scheduleRecordingCommandFallback(for: request)
             } else {
@@ -1844,41 +1936,147 @@ final class KeyboardViewController: UIInputViewController,
         }
     }
 
-    @objc private func cancelCurrentRecognition() {
-        guard recordingCommandFallbackTask == nil,
-              hostCaptureTask == nil else {
-            return
-        }
-
-        let snapshot = SharedCommandStore.latestRecordingSnapshot()
-        let now = Date().timeIntervalSince1970
-        let snapshotAge = now - snapshot.updatedAt
-        guard snapshotAge >= -0.5,
-              snapshotAge < 1.5,
-              snapshot.isPreparing
-                || snapshot.isRecording
-                || snapshot.isTranscribing else {
-            showLaunchFailure("当前没有可取消的识别任务")
-            return
-        }
-
-        SharedCommandStore.clearRecognitionResult()
-        SharedCommandStore.cancelKeyboardAutoInsert()
-        guard let request = SharedCommandStore.requestRecordingCommand(
-            .cancel,
-            requiresForegroundRoundTrip: false
-        ) else {
-            showLaunchFailure("共享通道不可用，请重新启用完整访问")
-            return
-        }
-
-        SharedCommandStore.recordKeyboardDiagnostic(
-            "recognition_cancel_requested",
-            detail: "id=\(request.id) preparing=\(snapshot.isPreparing ? 1 : 0) recording=\(snapshot.isRecording ? 1 : 0) transcribing=\(snapshot.isTranscribing ? 1 : 0)"
+    private func appendVoiceFinalizationDecision(
+        request: SharedRecordingToggleRequest,
+        rawText: String
+    ) {
+        let contextBefore = textDocumentProxy.documentContextBeforeInput ?? ""
+        let contextAfter = textDocumentProxy.documentContextAfterInput ?? ""
+        voiceFinalizationDecisions.append(
+            VoiceFinalizationDecision(
+                stopRequestID: request.id,
+                stopRequestedAt: request.requestedAt,
+                rawText: rawText,
+                contextBeforeSuffix: String(contextBefore.suffix(64)),
+                contextAfterPrefix: String(contextAfter.prefix(64)),
+                resolution: .waiting
+            )
         )
-        statusLabel.text = "正在取消本次识别..."
-        statusLabel.textColor = .secondaryLabel
-        scheduleRecordingCommandFallback(for: request)
+        trimVoiceFinalizationDecisions()
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "voice_finalization_waiting",
+            detail: "stop=\(request.id) raw_chars=\(rawText.count)"
+        )
+    }
+
+    @discardableResult
+    private func commitLatestWaitingRealtimeDraft(
+        now: TimeInterval,
+        reason: String,
+        stopRequestID: String? = nil
+    ) -> Bool {
+        let index: Int?
+        if let stopRequestID {
+            index = voiceFinalizationDecisions.lastIndex(
+                where: {
+                    $0.resolution == .waiting
+                        && $0.stopRequestID == stopRequestID
+                }
+            )
+        } else {
+            index = voiceFinalizationDecisions.lastIndex(
+                where: { $0.resolution == .waiting }
+            )
+        }
+        guard let index else {
+            return false
+        }
+
+        let decision = voiceFinalizationDecisions[index]
+        SharedCommandStore.markKeyboardManualInsertConsumed(
+            requestedAt: decision.stopRequestedAt
+        )
+
+        guard !decision.rawText.isEmpty,
+              isVoiceFinalizationContextUnchanged(decision) else {
+            voiceFinalizationDecisions[index].resolution = .detached
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "voice_realtime_commit_skipped",
+                detail: "stop=\(decision.stopRequestID) reason=\(decision.rawText.isEmpty ? "empty" : "context_changed") source=\(reason)"
+            )
+            return false
+        }
+
+        textDocumentProxy.insertText(decision.rawText)
+        voiceFinalizationDecisions[index].resolution = .realtimeCommitted
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "voice_realtime_draft_committed",
+            detail: "stop=\(decision.stopRequestID) chars=\(decision.rawText.count) source=\(reason)"
+        )
+        if reason == "manual_action" {
+            showTransientVoiceStatus(
+                "已使用实时稿",
+                color: .systemGreen,
+                duration: 1.2,
+                now: now
+            )
+        }
+        return true
+    }
+
+    private func isVoiceFinalizationContextUnchanged(
+        _ decision: VoiceFinalizationDecision
+    ) -> Bool {
+        let currentBefore = textDocumentProxy.documentContextBeforeInput ?? ""
+        let currentAfter = textDocumentProxy.documentContextAfterInput ?? ""
+        return String(currentBefore.suffix(64)) == decision.contextBeforeSuffix
+            && String(currentAfter.prefix(64)) == decision.contextAfterPrefix
+    }
+
+    private func trimVoiceFinalizationDecisions() {
+        guard voiceFinalizationDecisions.count > 8 else {
+            return
+        }
+        if let removableIndex = voiceFinalizationDecisions.firstIndex(
+            where: {
+                $0.resolution == .finalInserted
+                    || $0.copiedFinalText
+            }
+        ) {
+            voiceFinalizationDecisions.remove(at: removableIndex)
+        } else {
+            voiceFinalizationDecisions.removeFirst()
+        }
+    }
+
+    @objc private func performVoiceActivityAction() {
+        let now = Date().timeIntervalSince1970
+        switch voiceActivityAction {
+        case .useRealtime(let stopRequestID):
+            commitLatestWaitingRealtimeDraft(
+                now: now,
+                reason: "manual_action",
+                stopRequestID: stopRequestID
+            )
+            refreshRecordingSnapshot()
+        case .copyFinal(let stopRequestID):
+            guard let index = voiceFinalizationDecisions.lastIndex(
+                where: {
+                    $0.stopRequestID == stopRequestID
+                        && $0.finalText?.isEmpty == false
+                        && $0.resolution != .finalInserted
+                        && !$0.copiedFinalText
+                }
+            ), let finalText = voiceFinalizationDecisions[index].finalText else {
+                return
+            }
+
+            UIPasteboard.general.string = finalText
+            voiceFinalizationDecisions[index].copiedFinalText = true
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "voice_final_text_copied",
+                detail: "segment=\(voiceFinalizationDecisions[index].finalizedSegmentID ?? "-") chars=\(finalText.count)"
+            )
+            showTransientVoiceStatus(
+                "上一段最终稿已复制",
+                color: .systemGreen,
+                duration: 1.5,
+                now: now
+            )
+            refreshRecordingSnapshot()
+        case nil:
+            break
+        }
     }
 
     @MainActor
@@ -2165,19 +2363,56 @@ final class KeyboardViewController: UIInputViewController,
         let isPreparing = isFresh && snapshot.isPreparing
         let isActive = isFresh && snapshot.isRecording
         let isTranscribing = isFresh && snapshot.isTranscribing
+        observeFinalizedVoiceSegmentResult()
+        if isActive && !wasRecordingVoiceInput {
+            // 新一段录音必须立刻接管状态文案，不能被上一段短暂的
+            // “已输入/已更新”提示挡住，否则实时预览会看起来完全消失。
+            insertionMessageUntil = 0
+            retryableRecognitionResultID = nil
+            didRenderLiveTranscriptForCurrentSegment = false
+        }
         let shouldKeepInsertionMessage = now < insertionMessageUntil
         let shouldShowLaunchFailure = now < launchFailureMessageUntil
         let isLaunchingApp = appLaunchRequestedAt.map { now - $0 < 8 } ?? false
         let isAwaitingRecordingCommand = recordingCommandFallbackTask != nil
             || hostCaptureTask != nil
+        let isAwaitingStopCommand = recordingCommandFallbackTask != nil
+            && SharedCommandStore.latestRecordingToggleRequest()?.command == .stop
         let statusAge = now - snapshot.statusChangedAt
         let snapshotError = statusAge >= -0.5 && statusAge < 30
             ? voiceErrorMessage(from: snapshot.status)
             : nil
+        if let snapshotError,
+           !isActive,
+           !isPreparing,
+           !isTranscribing,
+           let failedIndex = voiceFinalizationDecisions.lastIndex(
+               where: {
+                   $0.finalText == nil
+                       && !$0.finalizationFailed
+                       && $0.resolution != .finalInserted
+               }
+           ) {
+            voiceFinalizationDecisions[failedIndex].finalizationFailed = true
+            SharedCommandStore.recordKeyboardDiagnostic(
+                "voice_finalization_failed",
+                detail: "stop=\(voiceFinalizationDecisions[failedIndex].stopRequestID) message=\(snapshotError)"
+            )
+        }
         let liveTranscript = snapshot.transcript.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-
+        if isActive {
+            updateLiveTranscript(liveTranscript)
+            if !liveTranscript.isEmpty,
+               !didRenderLiveTranscriptForCurrentSegment {
+                didRenderLiveTranscriptForCurrentSegment = true
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "voice_live_preview_rendered",
+                    detail: "chars=\(liveTranscript.count)"
+                )
+            }
+        }
         if !shouldKeepInsertionMessage {
             retryableRecognitionResultID = nil
             statusLabel.accessibilityHint = nil
@@ -2205,12 +2440,14 @@ final class KeyboardViewController: UIInputViewController,
                     && !isPreparing
                     && !isActive
                     && !isTranscribing),
-            isPreparing: isPreparing
+            isPreparing: isPreparing,
+            isRecording: isActive,
+            isTranscribing: isTranscribing,
+            isAwaitingStopCommand: isAwaitingStopCommand
         )
         updateVoiceTaskPresentation(
             isRecording: isActive,
             isTranscribing: isTranscribing,
-            isAwaitingCommand: isAwaitingRecordingCommand || isPreparing,
             audioLevel: isActive ? snapshot.audioLevel : 0
         )
 
@@ -2225,17 +2462,10 @@ final class KeyboardViewController: UIInputViewController,
                 : snapshot.status
             statusLabel.textColor = .secondaryLabel
         } else if isActive {
-            statusLabel.text = liveTranscript.isEmpty
-                ? "可以说话 · 再次点击完成"
-                : liveTranscript
-            statusLabel.textColor = snapshot.transcriptIsFinal
-                ? .label
-                : .secondaryLabel
+            statusLabel.text = nil
         } else if isTranscribing {
             statusLabel.textColor = .secondaryLabel
-            statusLabel.text = liveTranscript.isEmpty
-                ? "正在等待阿里云最终结果"
-                : liveTranscript
+            statusLabel.text = "点击开始下一段"
         } else if isLaunchingApp || isAwaitingRecordingCommand {
             statusLabel.text = nil
             statusLabel.textColor = .secondaryLabel
@@ -2247,7 +2477,148 @@ final class KeyboardViewController: UIInputViewController,
             statusLabel.textColor = .secondaryLabel
         }
 
-        insertRecognitionResultIfNeeded(isRecording: isActive, isTranscribing: isTranscribing, now: now)
+        insertRecognitionResultIfNeeded(
+            isRecording: isActive || isPreparing,
+            now: now
+        )
+        updateVoiceFinalizationPresentation(
+            isRecording: isActive,
+            isTranscribing: isTranscribing,
+            now: now
+        )
+    }
+
+    private func observeFinalizedVoiceSegmentResult() {
+        guard let result = SharedCommandStore.latestFinalizedSegmentResult(),
+              result.segmentID != lastObservedFinalizedSegmentID else {
+            return
+        }
+        lastObservedFinalizedSegmentID = result.segmentID
+
+        guard let index = voiceFinalizationDecisions.lastIndex(
+            where: {
+                $0.stopRequestID == result.stopRequestID
+                    || abs($0.stopRequestedAt - result.stopRequestedAt) < 0.5
+            }
+        ) else {
+            return
+        }
+
+        voiceFinalizationDecisions[index].finalText = result.text
+        voiceFinalizationDecisions[index].finalizedSegmentID = result.segmentID
+        SharedCommandStore.recordKeyboardDiagnostic(
+            "voice_finalized_segment_observed",
+            detail: "segment=\(result.segmentID) stop=\(result.stopRequestID) chars=\(result.text.count)"
+        )
+    }
+
+    private func updateVoiceFinalizationPresentation(
+        isRecording: Bool,
+        isTranscribing: Bool,
+        now: TimeInterval
+    ) {
+        guard let activityRow = voiceActivityRow,
+              let activityLabel = voiceActivityLabel,
+              let actionButton = voiceActivityActionButton else {
+            return
+        }
+
+        let waitingIndex = voiceFinalizationDecisions.lastIndex(
+            where: { $0.resolution == .waiting }
+        )
+        let copyIndex = voiceFinalizationDecisions.lastIndex(
+            where: {
+                $0.finalText?.isEmpty == false
+                    && $0.resolution != .finalInserted
+                    && !$0.copiedFinalText
+            }
+        )
+        let failureIndex = voiceFinalizationDecisions.lastIndex(
+            where: {
+                $0.finalizationFailed
+                    && $0.resolution != .finalInserted
+            }
+        )
+        let unresolvedCount = voiceFinalizationDecisions.filter {
+            $0.finalText == nil
+                && !$0.finalizationFailed
+                && $0.resolution != .finalInserted
+        }.count
+
+        voiceActivityAction = nil
+        var showsRow = false
+        if let failureIndex,
+           (waitingIndex.map({
+               voiceFinalizationDecisions[failureIndex].stopRequestedAt
+                   >= voiceFinalizationDecisions[$0].stopRequestedAt
+           }) ?? true) {
+            let decision = voiceFinalizationDecisions[failureIndex]
+            showsRow = true
+            activityLabel.text = decision.resolution == .waiting
+                ? "上一段整理失败"
+                : "上一段整理失败，已保留实时稿"
+            setVoiceActivityActionTitle(
+                decision.resolution == .waiting && !decision.rawText.isEmpty
+                    ? "使用实时稿"
+                    : nil
+            )
+            if decision.resolution == .waiting && !decision.rawText.isEmpty {
+                voiceActivityAction = .useRealtime(
+                    stopRequestID: decision.stopRequestID
+                )
+            }
+            actionButton.accessibilityLabel = "使用上一段实时稿"
+        } else if let waitingIndex {
+            let decision = voiceFinalizationDecisions[waitingIndex]
+            let hasWaitedLongEnough = now - decision.stopRequestedAt
+                >= Self.finalizationPromptDelay
+            if hasWaitedLongEnough {
+                showsRow = true
+                activityLabel.text = "上一段正在整理…"
+                setVoiceActivityActionTitle(
+                    decision.rawText.isEmpty ? nil : "立即使用实时稿"
+                )
+                if !decision.rawText.isEmpty {
+                    voiceActivityAction = .useRealtime(
+                        stopRequestID: decision.stopRequestID
+                    )
+                }
+                actionButton.accessibilityLabel = "立即使用上一段实时稿"
+            }
+        } else if let copyIndex {
+            let decision = voiceFinalizationDecisions[copyIndex]
+            showsRow = true
+            activityLabel.text = "上一段最终稿已生成"
+            setVoiceActivityActionTitle("复制")
+            voiceActivityAction = .copyFinal(
+                stopRequestID: decision.stopRequestID
+            )
+            actionButton.accessibilityLabel = "复制上一段最终稿"
+        } else if unresolvedCount > 0 || isTranscribing {
+            showsRow = true
+            activityLabel.text = unresolvedCount > 1
+                ? "\(unresolvedCount) 段正在整理…"
+                : "上一段正在整理…"
+            setVoiceActivityActionTitle(nil)
+        }
+
+        showsRow = showsRow && !isRecording
+        activityRow.isHidden = !showsRow
+        if showsRow {
+            statusLabel.isHidden = true
+        } else {
+            statusLabel.isHidden = isRecording
+        }
+    }
+
+    private func setVoiceActivityActionTitle(_ title: String?) {
+        guard let button = voiceActivityActionButton else {
+            return
+        }
+        var configuration = button.configuration
+        configuration?.title = title
+        button.configuration = configuration
+        button.isHidden = title == nil
     }
 
     private func voiceErrorMessage(from status: String) -> String? {
@@ -2291,56 +2662,80 @@ final class KeyboardViewController: UIInputViewController,
 
     private func updateRecordingButton(
         isLaunchingApp: Bool,
-        isPreparing: Bool
+        isPreparing: Bool,
+        isRecording: Bool,
+        isTranscribing: Bool,
+        isAwaitingStopCommand: Bool
     ) {
         guard let recordingButton else {
             return
         }
 
         var configuration = recordingButton.configuration
-        var targetWidth: CGFloat
-        var targetHeight: CGFloat
+        configuration?.title = nil
+        configuration?.image = isRecording
+            ? nil
+            : UIImage(systemName: "mic.fill")
+        configuration?.baseBackgroundColor = .label
+        configuration?.baseForegroundColor = .systemBackground
 
-        if isPreparing {
-            configuration?.title = "正在准备…"
-            configuration?.image = nil
-            configuration?.baseBackgroundColor = .systemOrange.withAlphaComponent(0.25)
-            configuration?.baseForegroundColor = .label
-            targetWidth = 112
-            targetHeight = 44
-            recordingButton.isEnabled = false
+        let isTemporarilyUnavailable = isPreparing
+            || isLaunchingApp
+            || isAwaitingStopCommand
+        recordingButton.isEnabled = !isTemporarilyUnavailable
+        recordingButton.alpha = isTemporarilyUnavailable ? 0.55 : 1
+        recordingButton.accessibilityTraits = isRecording
+            ? [.button, .selected]
+            : .button
+        recordingButton.accessibilityValue = isRecording
+            ? "正在录音"
+            : nil
+        recordingButton.layer.cornerCurve = .continuous
+        recordingButton.layer.cornerRadius = isRecording ? 32 : 24
+        recordingButton.layer.borderWidth = isRecording ? 4 : 0
+        recordingButton.layer.borderColor = UIColor.systemGray4.cgColor
+        recordingLevelView?.isHidden = !isRecording
+
+        statusLabel.isHidden = isRecording
+        liveTranscriptView?.isHidden = !isRecording
+
+        if isRecording && isAwaitingStopCommand {
+            recordingButton.accessibilityLabel = "正在结束当前语音"
+            recordingButton.accessibilityHint = nil
+        } else if isPreparing {
             recordingButton.accessibilityLabel = "正在准备语音输入，请稍候"
+            recordingButton.accessibilityHint = nil
         } else if isLaunchingApp {
-            configuration?.title = "正在启动…"
-            configuration?.image = nil
-            configuration?.baseBackgroundColor = .systemGray3
-            configuration?.baseForegroundColor = .label
-            targetWidth = 112
-            targetHeight = 44
-            recordingButton.isEnabled = false
             recordingButton.accessibilityLabel = "正在启动语音输入"
+            recordingButton.accessibilityHint = nil
+        } else if isRecording {
+            recordingButton.accessibilityLabel = "结束本段语音"
+            recordingButton.accessibilityHint =
+                "结束本段并等待最终文本，也可以立即使用实时稿"
         } else {
-            configuration?.title = nil
-            configuration?.image = UIImage(systemName: "mic.fill")
-            configuration?.baseBackgroundColor = .label
-            configuration?.baseForegroundColor = .systemBackground
-            targetWidth = 128
-            targetHeight = 56
-            recordingButton.isEnabled = true
             recordingButton.accessibilityLabel = "开始语音输入"
+            recordingButton.accessibilityHint = isTranscribing
+                ? "上一段正在后台整理，轻点开始下一段"
+                : "轻点开始录音，再次轻点结束本段"
         }
 
         recordingButton.configuration = configuration
-        updateRecordingButtonSize(width: targetWidth, height: targetHeight)
+        if let recordingLevelView {
+            recordingButton.bringSubviewToFront(recordingLevelView)
+        }
+        updateRecordingButtonSize(
+            width: isRecording ? 64 : 120,
+            height: isRecording ? 64 : 48,
+            centerY: 44
+        )
     }
 
     private func updateVoiceTaskPresentation(
         isRecording: Bool,
         isTranscribing: Bool,
-        isAwaitingCommand: Bool,
         audioLevel: Double
     ) {
-        let isTaskActive = isRecording || isTranscribing
+        let isTaskActive = isRecording
 
         for (module, button) in moduleButtons where module != .voice {
             button.isEnabled = true
@@ -2367,9 +2762,9 @@ final class KeyboardViewController: UIInputViewController,
                 ),
                 for: .normal
             )
-            voiceButton.tintColor = isRecording
-                ? .systemRed
-                : (isTranscribing ? .systemOrange : .label)
+            voiceButton.tintColor = isTranscribing
+                ? .secondaryLabel
+                : .label
             voiceButton.accessibilityLabel = isRecording
                 ? "语音，正在录音"
                 : (isTranscribing ? "语音，正在整理识别结果" : "语音")
@@ -2382,78 +2777,56 @@ final class KeyboardViewController: UIInputViewController,
             isShowingVoiceTaskControls = isTaskActive
             stopDeleting()
             endCursorTracking(refreshSnapshot: false)
-            statusLabel.font = isTaskActive
-                ? .systemFont(ofSize: 15, weight: .medium)
-                : .systemFont(ofSize: 13, weight: .medium)
-            voiceIdleControls.forEach { $0.isHidden = isTaskActive }
-            voiceActivityRow?.isHidden = !isTaskActive
-            voiceActiveActionRow?.isHidden = !isTaskActive
-            NSLayoutConstraint.deactivate(
-                isTaskActive
-                    ? statusLabelIdleConstraints
-                    : statusLabelActiveConstraints
-            )
-            NSLayoutConstraint.activate(
-                isTaskActive
-                    ? statusLabelActiveConstraints
-                    : statusLabelIdleConstraints
-            )
-            UIView.animate(
-                withDuration: 0.2,
-                delay: 0,
-                options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
-            ) {
-                self.view.layoutIfNeeded()
-            }
         }
 
-        recordingLevelView?.isHidden = !isRecording
         recordingLevelView?.update(level: audioLevel, isActive: isRecording)
-        voiceActivityLabel?.text = isRecording
-            ? "正在聆听"
-            : "正在整理最终结果"
+        voiceActivityRow?.isHidden = true
+    }
 
-        guard let cancelRecordingButton,
-              let finishRecordingButton else {
+    private func updateLiveTranscript(_ transcript: String) {
+        guard let liveTranscriptView else {
             return
         }
 
-        cancelRecordingButton.isEnabled = isTaskActive && !isAwaitingCommand
-        cancelRecordingButton.alpha = cancelRecordingButton.isEnabled ? 1 : 0.55
-        var configuration = cancelRecordingButton.configuration
-        configuration?.baseForegroundColor = cancelRecordingButton.isEnabled
-            ? .systemRed
-            : .tertiaryLabel
-        cancelRecordingButton.configuration = configuration
+        let isEmpty = transcript.isEmpty
+        let displayedText = isEmpty ? "正在聆听…" : transcript
+        liveTranscriptView.textColor = isEmpty ? .secondaryLabel : .label
+        liveTranscriptView.textAlignment = isEmpty ? .center : .natural
+        liveTranscriptView.accessibilityLabel = isEmpty
+            ? "正在聆听"
+            : "实时识别：\(transcript)"
 
-        var finishConfiguration = finishRecordingButton.configuration
-        if isRecording {
-            finishConfiguration?.title = isAwaitingCommand ? "正在完成…" : "完成"
-            finishConfiguration?.image = isAwaitingCommand
-                ? nil
-                : UIImage(systemName: "stop.fill")
-            finishRecordingButton.isEnabled = !isAwaitingCommand
-            finishRecordingButton.accessibilityLabel = isAwaitingCommand
-                ? "正在完成语音输入"
-                : "完成语音输入"
-        } else {
-            finishConfiguration?.title = "正在整理…"
-            finishConfiguration?.image = nil
-            finishRecordingButton.isEnabled = false
-            finishRecordingButton.accessibilityLabel = "正在整理语音识别结果"
+        guard liveTranscriptView.text != displayedText else {
+            return
         }
-        finishRecordingButton.configuration = finishConfiguration
+
+        liveTranscriptView.text = displayedText
+        liveTranscriptView.layoutIfNeeded()
+        liveTranscriptView.scrollRangeToVisible(
+            NSRange(location: liveTranscriptView.textStorage.length, length: 0)
+        )
     }
 
-    private func updateRecordingButtonSize(width: CGFloat, height: CGFloat) {
+    private func updateRecordingButtonSize(
+        width: CGFloat,
+        height: CGFloat,
+        centerY: CGFloat
+    ) {
         guard let widthConstraint = recordingButtonWidthConstraint,
               let heightConstraint = recordingButtonHeightConstraint,
-              widthConstraint.constant != width || heightConstraint.constant != height else {
+              let centerYConstraint = recordingButtonCenterYConstraint else {
+            return
+        }
+
+        guard widthConstraint.constant != width
+                || heightConstraint.constant != height
+                || centerYConstraint.constant != centerY else {
             return
         }
 
         widthConstraint.constant = width
         heightConstraint.constant = height
+        centerYConstraint.constant = centerY
         UIView.animate(
             withDuration: 0.2,
             delay: 0,
@@ -2494,10 +2867,9 @@ final class KeyboardViewController: UIInputViewController,
 
     private func insertRecognitionResultIfNeeded(
         isRecording: Bool,
-        isTranscribing: Bool,
         now: TimeInterval
     ) {
-        guard !isRecording, !isTranscribing else {
+        guard !isRecording else {
             return
         }
 
@@ -2553,6 +2925,30 @@ final class KeyboardViewController: UIInputViewController,
             )
             SharedCommandStore.cancelKeyboardAutoInsert()
             return
+        }
+
+        if let decisionIndex = voiceFinalizationDecisions.lastIndex(
+            where: {
+                $0.resolution == .waiting
+                    && abs($0.stopRequestedAt - requestedAt) < 0.5
+            }
+        ) {
+            if !isVoiceFinalizationContextUnchanged(
+                voiceFinalizationDecisions[decisionIndex]
+            ) {
+                voiceFinalizationDecisions[decisionIndex].resolution = .detached
+                voiceFinalizationDecisions[decisionIndex].finalText = result.text
+                lastHandledRecognitionResultID = result.id
+                SharedCommandStore.cancelKeyboardAutoInsert()
+                SharedCommandStore.recordKeyboardDiagnostic(
+                    "voice_final_auto_insert_detached",
+                    detail: "stop=\(voiceFinalizationDecisions[decisionIndex].stopRequestID) chars=\(result.text.count)"
+                )
+                lastInsertionDiagnosticState = nil
+                return
+            }
+            voiceFinalizationDecisions[decisionIndex].resolution = .finalInserted
+            voiceFinalizationDecisions[decisionIndex].finalText = result.text
         }
 
         performRecognitionResultInsertion(result, source: "automatic", now: now)
@@ -2794,7 +3190,7 @@ final class KeyboardViewController: UIInputViewController,
                         )
                         if request.command == .cancel {
                             self.showTransientVoiceStatus(
-                                "已取消本次识别",
+                                "已放弃本段",
                                 color: .secondaryLabel,
                                 duration: 1.5,
                                 now: Date().timeIntervalSince1970
@@ -2830,7 +3226,7 @@ final class KeyboardViewController: UIInputViewController,
                 if reachedRequestedState {
                     if request.command == .cancel {
                         self.showTransientVoiceStatus(
-                            "已取消本次识别",
+                            "已放弃本段",
                             color: .secondaryLabel,
                             duration: 1.5,
                             now: Date().timeIntervalSince1970
@@ -2880,7 +3276,7 @@ final class KeyboardViewController: UIInputViewController,
         case .stop:
             statusLabel.text = "停止请求未响应，正在打开 AgenBoard..."
         case .cancel:
-            statusLabel.text = "取消请求未响应，正在打开 AgenBoard..."
+            statusLabel.text = "放弃请求未响应，正在打开 AgenBoard..."
         }
         openContainingApp(
             recordingURL(for: request),
@@ -3546,7 +3942,7 @@ private final class KeyboardAudioLevelView: UIView {
         for (index, constraint) in heightConstraints.enumerated() {
             let oscillation = 0.62 + 0.38 * abs(sin(phase + CGFloat(index) * 0.83))
             let energy = min(1, displayedLevel * 1.65)
-            constraint.constant = 5 + 34 * energy * barWeights[index] * oscillation
+            constraint.constant = 4 + 22 * energy * barWeights[index] * oscillation
         }
 
         UIView.animate(
@@ -3569,12 +3965,12 @@ private final class KeyboardAudioLevelView: UIView {
         for _ in barWeights {
             let bar = UIView()
             bar.backgroundColor = .systemBackground
-            bar.layer.cornerRadius = 2.5
+            bar.layer.cornerRadius = 1.75
             bar.layer.cornerCurve = .continuous
             bar.translatesAutoresizingMaskIntoConstraints = false
-            let heightConstraint = bar.heightAnchor.constraint(equalToConstant: 5)
+            let heightConstraint = bar.heightAnchor.constraint(equalToConstant: 4)
             NSLayoutConstraint.activate([
-                bar.widthAnchor.constraint(equalToConstant: 5),
+                bar.widthAnchor.constraint(equalToConstant: 3.5),
                 heightConstraint
             ])
             heightConstraints.append(heightConstraint)

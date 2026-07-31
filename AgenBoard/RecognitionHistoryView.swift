@@ -103,6 +103,9 @@ private struct RecognitionHistoryRow: View {
     }
 
     private var resultStatus: String {
+        if item.isFinalizationPending {
+            return "\(item.originalProvider?.shortTitle ?? "识别") · 整理中"
+        }
         if let originalResult = item.resolvedOriginalResult {
             let rerunCount = item.availableRerunResults.count
             return rerunCount > 0

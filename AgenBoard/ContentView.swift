@@ -36,7 +36,6 @@ struct ContentView: View {
     @State private var retriedFailedRecordingRequestIDs: Set<String> = []
     @State private var deferredRecordingRequestID: String?
     @State private var activeLaunchRequest: SharedRecordingToggleRequest?
-    @State private var queuedRecordingStartRequest: SharedRecordingToggleRequest?
     @State private var keepsPictureInPictureAlive = false
     @State private var showsManualReturnGuidance = false
     @State private var manualReturnNeedsSystemFallback = false
@@ -691,7 +690,6 @@ struct ContentView: View {
             if isRecording {
                 UINotificationFeedbackGenerator()
                     .notificationOccurred(.success)
-                queuedRecordingStartRequest = nil
                 RecordingLaunchMetrics.mark(
                     "main_recording_state_ready",
                     request: activeLaunchRequest
@@ -705,11 +703,6 @@ struct ContentView: View {
                 }
             }
             scheduleAutomaticReturnIfReady()
-        }
-        .onChange(of: recorder.isTranscribing) { _, isTranscribing in
-            if !isTranscribing {
-                startQueuedRecordingIfReady()
-            }
         }
         .onChange(of: recorder.audioLevel) { _, level in
             pip.setAudioLevel(level)
@@ -744,7 +737,6 @@ struct ContentView: View {
                     failPendingReturnAttempt(detail: "scene_became_active_before_background")
                 }
                 handleLatestSharedRecordingRequest()
-                startQueuedRecordingIfReady()
                 scheduleAutomaticReturnIfReady()
                 return
             }
@@ -847,7 +839,9 @@ struct ContentView: View {
             case .start:
                 recorder.startRecordingIfNeeded()
             case .stop:
-                recorder.stopRecordingAndTranscribeIfNeeded()
+                recorder.stopRecordingAndTranscribeIfNeeded(
+                    deliverResultToKeyboard: true
+                )
             case .cancel:
                 recorder.cancelCurrentRecognition()
             }
@@ -1110,29 +1104,19 @@ struct ContentView: View {
                     phase: .preparing,
                     message: "正在启动麦克风和 FunASR 实时链路"
                 )
-            } else if recorder.isTranscribing {
-                queuedRecordingStartRequest = request
-                SharedCommandStore.updateRecordingRequestResponse(
-                    for: request,
-                    phase: .accepted,
-                    message: "上一段语音识别完成后将自动开始录音"
-                )
-                RecordingLaunchMetrics.mark(
-                    "main_recording_start_queued_after_transcription",
-                    request: request
-                )
             } else {
                 recorder.startRecordingIfNeeded(request: request)
             }
         case .stop:
-            queuedRecordingStartRequest = nil
-            recorder.stopRecordingAndTranscribeIfNeeded()
+            recorder.stopRecordingAndTranscribeIfNeeded(
+                deliverResultToKeyboard: true,
+                request: request
+            )
             SharedCommandStore.updateRecordingRequestResponse(
                 for: request,
                 phase: .stopped
             )
         case .cancel:
-            queuedRecordingStartRequest = nil
             recorder.cancelCurrentRecognition()
             SharedCommandStore.updateRecordingRequestResponse(
                 for: request,
@@ -1140,33 +1124,6 @@ struct ContentView: View {
             )
         }
         scheduleAutomaticReturnIfReady()
-    }
-
-    private func startQueuedRecordingIfReady() {
-        guard scenePhase == .active,
-              !recorder.isPreparingRecording,
-              !recorder.isRecording,
-              !recorder.isTranscribing,
-              let request = queuedRecordingStartRequest else {
-            return
-        }
-
-        queuedRecordingStartRequest = nil
-        keepsPictureInPictureAlive = true
-        if request.requiresForegroundRoundTrip {
-            showsManualReturnGuidance = true
-            pip.prepareForAutomaticStart()
-        }
-        SharedCommandStore.updateRecordingRequestResponse(
-            for: request,
-            phase: .accepted,
-            message: "上一段识别完成，正在开始录音"
-        )
-        RecordingLaunchMetrics.mark(
-            "main_recording_start_resumed_after_transcription",
-            request: request
-        )
-        recorder.startRecordingIfNeeded(request: request)
     }
 
     private func scheduleAutomaticReturnIfReady() {

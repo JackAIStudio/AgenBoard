@@ -23,6 +23,14 @@ struct SharedRecognitionResult {
     let autoInsertRequestedAt: TimeInterval
 }
 
+struct SharedFinalizedSegmentResult {
+    let segmentID: String
+    let stopRequestID: String
+    let stopRequestedAt: TimeInterval
+    let text: String
+    let createdAt: TimeInterval
+}
+
 enum SharedRecordingCommand: String {
     case start
     case stop
@@ -194,8 +202,17 @@ enum SharedCommandStore {
     private static let recognitionResultInsertedIDKey = "recognitionResultInsertedID"
     private static let recognitionResultInsertionAttemptedAtKey =
         "recognitionResultInsertionAttemptedAt"
+    private static let finalizedSegmentIDKey = "finalizedSegmentID"
+    private static let finalizedSegmentStopRequestIDKey =
+        "finalizedSegmentStopRequestID"
+    private static let finalizedSegmentStopRequestedAtKey =
+        "finalizedSegmentStopRequestedAt"
+    private static let finalizedSegmentTextKey = "finalizedSegmentText"
+    private static let finalizedSegmentCreatedAtKey = "finalizedSegmentCreatedAt"
     private static let keyboardAutoInsertRequestedAtKey = "keyboardAutoInsertRequestedAt"
     private static let keyboardAutoInsertPendingKey = "keyboardAutoInsertPending"
+    private static let keyboardManualInsertConsumedAtKey =
+        "keyboardManualInsertConsumedAt"
     private static let keyboardDiagnosticEventsKey = "keyboardDiagnosticEvents"
     private static let quickPhrasesKey = "quickPhrases"
     private static let keyboardQuickPhraseModuleVisibleKey =
@@ -478,7 +495,8 @@ enum SharedCommandStore {
     static func requestRecordingCommand(
         _ command: SharedRecordingCommand,
         requiresForegroundRoundTrip: Bool = true,
-        sourceHost: SharedKeyboardHostCapture? = nil
+        sourceHost: SharedKeyboardHostCapture? = nil,
+        suppressAutomaticInsertion: Bool = false
     ) -> SharedRecordingToggleRequest? {
         guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return nil
@@ -518,14 +536,47 @@ enum SharedCommandStore {
         defaults.removeObject(forKey: recordingResponseUpdatedAtKey)
         if command == .cancel {
             defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+            defaults.removeObject(forKey: keyboardManualInsertConsumedAtKey)
             defaults.removeObject(forKey: recognitionResultIDKey)
             defaults.removeObject(forKey: recognitionResultTextKey)
             defaults.removeObject(forKey: recognitionResultCreatedAtKey)
             defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
             defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
-        } else {
+        } else if command == .start {
+            // A brand-new recording session always reopens automatic insertion.
             defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
+            defaults.removeObject(forKey: keyboardManualInsertConsumedAtKey)
             defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+        } else if suppressAutomaticInsertion {
+            // The keyboard already inserted the live draft. Keep publishing the
+            // finalized result, but never auto-insert it as a duplicate.
+            defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
+            defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+            defaults.set(requestedAt, forKey: keyboardManualInsertConsumedAtKey)
+        } else {
+            // Stopping should preserve a manual insert that already happened while
+            // the user was still recording; otherwise the final result would be
+            // auto-inserted a second time.
+            let previousRequestedAt = defaults.double(
+                forKey: keyboardAutoInsertRequestedAtKey
+            )
+            let manualInsertConsumedAt = defaults.double(
+                forKey: keyboardManualInsertConsumedAtKey
+            )
+            let manualInsertAlreadyConsumed = manualInsertConsumedAt > 0
+                && (
+                    previousRequestedAt <= 0
+                        || abs(manualInsertConsumedAt - previousRequestedAt) < 0.5
+                        || !defaults.bool(forKey: keyboardAutoInsertPendingKey)
+                )
+            defaults.set(requestedAt, forKey: keyboardAutoInsertRequestedAtKey)
+            if manualInsertAlreadyConsumed {
+                defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+                defaults.set(requestedAt, forKey: keyboardManualInsertConsumedAtKey)
+            } else {
+                defaults.removeObject(forKey: keyboardManualInsertConsumedAtKey)
+                defaults.set(true, forKey: keyboardAutoInsertPendingKey)
+            }
         }
         // synchronize() only asks CFPreferences to flush pending changes. Its
         // Boolean result is not a reliable availability check for an App Group:
@@ -772,6 +823,36 @@ enum SharedCommandStore {
         defaults.synchronize()
     }
 
+    static func markKeyboardManualInsertConsumed(
+        requestedAt: TimeInterval? = nil
+    ) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+
+        let consumedAt = requestedAt
+            ?? defaults.double(forKey: keyboardAutoInsertRequestedAtKey)
+        defaults.set(false, forKey: keyboardAutoInsertPendingKey)
+        if consumedAt > 0 {
+            defaults.set(consumedAt, forKey: keyboardManualInsertConsumedAtKey)
+        } else {
+            defaults.set(
+                Date().timeIntervalSince1970,
+                forKey: keyboardManualInsertConsumedAtKey
+            )
+        }
+        defaults.synchronize()
+        recordKeyboardDiagnostic(
+            "keyboard_manual_insert_consumed",
+            detail: "requested_at=\(consumedAt)"
+        )
+    }
+
+    static func latestKeyboardManualInsertConsumedAt() -> TimeInterval {
+        UserDefaults(suiteName: appGroupIdentifier)?
+            .double(forKey: keyboardManualInsertConsumedAtKey) ?? 0
+    }
+
     static func updateRecordingSnapshot(
         isPreparing: Bool,
         isRecording: Bool,
@@ -866,6 +947,7 @@ enum SharedCommandStore {
         defaults.removeObject(forKey: recognitionResultCreatedAtKey)
         defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
         defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
+        defaults.removeObject(forKey: keyboardManualInsertConsumedAtKey)
         defaults.synchronize()
     }
 
@@ -879,9 +961,15 @@ enum SharedCommandStore {
         }
 
         let id = UUID().uuidString
-        let autoInsertRequestedAt = defaults.bool(forKey: keyboardAutoInsertPendingKey)
-            ? defaults.double(forKey: keyboardAutoInsertRequestedAtKey)
-            : 0
+        let requestedAt = defaults.double(forKey: keyboardAutoInsertRequestedAtKey)
+        let manualInsertConsumedAt = defaults.double(
+            forKey: keyboardManualInsertConsumedAtKey
+        )
+        let shouldAutoInsert = defaults.bool(forKey: keyboardAutoInsertPendingKey)
+            && !(manualInsertConsumedAt > 0
+                && requestedAt > 0
+                && abs(manualInsertConsumedAt - requestedAt) < 0.5)
+        let autoInsertRequestedAt = shouldAutoInsert ? requestedAt : 0
         defaults.set(id, forKey: recognitionResultIDKey)
         defaults.set(trimmedText, forKey: recognitionResultTextKey)
         defaults.set(Date().timeIntervalSince1970, forKey: recognitionResultCreatedAtKey)
@@ -892,6 +980,9 @@ enum SharedCommandStore {
             )
         } else {
             defaults.removeObject(forKey: recognitionResultAutoInsertRequestedAtKey)
+        }
+        if !shouldAutoInsert {
+            defaults.set(false, forKey: keyboardAutoInsertPendingKey)
         }
         defaults.removeObject(forKey: recognitionResultInsertionAttemptedAtKey)
         defaults.synchronize()
@@ -917,6 +1008,57 @@ enum SharedCommandStore {
             autoInsertRequestedAt: defaults.double(
                 forKey: recognitionResultAutoInsertRequestedAtKey
             )
+        )
+    }
+
+    static func publishFinalizedSegmentResult(
+        segmentID: String,
+        stopRequest: SharedRecordingToggleRequest,
+        text: String
+    ) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty,
+              let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(segmentID, forKey: finalizedSegmentIDKey)
+        defaults.set(stopRequest.id, forKey: finalizedSegmentStopRequestIDKey)
+        defaults.set(
+            stopRequest.requestedAt,
+            forKey: finalizedSegmentStopRequestedAtKey
+        )
+        defaults.set(trimmedText, forKey: finalizedSegmentTextKey)
+        defaults.set(
+            Date().timeIntervalSince1970,
+            forKey: finalizedSegmentCreatedAtKey
+        )
+        defaults.synchronize()
+        recordKeyboardDiagnostic(
+            "finalized_segment_result_published",
+            detail: "segment=\(segmentID) stop=\(stopRequest.id) chars=\(trimmedText.count)"
+        )
+    }
+
+    static func latestFinalizedSegmentResult() -> SharedFinalizedSegmentResult? {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+              let segmentID = defaults.string(forKey: finalizedSegmentIDKey),
+              let stopRequestID = defaults.string(
+                  forKey: finalizedSegmentStopRequestIDKey
+              ),
+              let text = defaults.string(forKey: finalizedSegmentTextKey),
+              !text.isEmpty else {
+            return nil
+        }
+
+        return SharedFinalizedSegmentResult(
+            segmentID: segmentID,
+            stopRequestID: stopRequestID,
+            stopRequestedAt: defaults.double(
+                forKey: finalizedSegmentStopRequestedAtKey
+            ),
+            text: text,
+            createdAt: defaults.double(forKey: finalizedSegmentCreatedAtKey)
         )
     }
 
