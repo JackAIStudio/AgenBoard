@@ -47,6 +47,8 @@ struct ContentView: View {
     @State private var keyboardQuickPhraseModuleVisible =
         SharedCommandStore.keyboardQuickPhraseModuleVisible()
     @State private var keyboardHapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
+    @State private var keyboardEnglishAutoCapitalizationEnabled =
+        SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled()
     @State private var showsGettingStartedGuide = false
     @State private var evaluatedInitialGuidePresentation = false
     @State private var keyboardAccessVerified =
@@ -535,6 +537,40 @@ struct ContentView: View {
 
                     Toggle(
                         isOn: Binding(
+                            get: { keyboardEnglishAutoCapitalizationEnabled },
+                            set: { isEnabled in
+                                keyboardEnglishAutoCapitalizationEnabled = isEnabled
+                                SharedCommandStore
+                                    .setKeyboardEnglishAutoCapitalizationEnabled(isEnabled)
+                            }
+                        )
+                    ) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "textformat.size.larger")
+                                .font(.title3)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("英文句首自动大写")
+                                    .font(.headline)
+
+                                Text(
+                                    keyboardEnglishAutoCapitalizationEnabled
+                                        ? "切换到英文或开始新句子时自动启用一次大写"
+                                        : "切换到英文时保持小写，仍可手动使用上档键"
+                                )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .padding(14)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Toggle(
+                        isOn: Binding(
                             get: { keyboardHapticsEnabled },
                             set: { isEnabled in
                                 keyboardHapticsEnabled = isEnabled
@@ -909,6 +945,8 @@ struct ContentView: View {
         keyboardQuickPhraseModuleVisible =
             SharedCommandStore.keyboardQuickPhraseModuleVisible()
         keyboardHapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
+        keyboardEnglishAutoCapitalizationEnabled =
+            SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled()
     }
 
     private func recordingRequest(from url: URL) -> SharedRecordingToggleRequest? {

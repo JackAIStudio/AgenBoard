@@ -218,6 +218,8 @@ enum SharedCommandStore {
     private static let keyboardQuickPhraseModuleVisibleKey =
         "keyboardQuickPhraseModuleVisible"
     private static let keyboardHapticsEnabledKey = "keyboardHapticsEnabled"
+    private static let keyboardEnglishAutoCapitalizationEnabledKey =
+        "keyboardEnglishAutoCapitalizationEnabled"
     private static let keyboardSelectedContentModuleKey =
         "keyboardSelectedContentModule"
     private static let keyboardAccessVerificationRequestIDKey =
@@ -357,6 +359,19 @@ enum SharedCommandStore {
             return
         }
         defaults.set(isEnabled, forKey: keyboardHapticsEnabledKey)
+        defaults.synchronize()
+    }
+
+    static func keyboardEnglishAutoCapitalizationEnabled() -> Bool {
+        UserDefaults(suiteName: appGroupIdentifier)?
+            .bool(forKey: keyboardEnglishAutoCapitalizationEnabledKey) ?? false
+    }
+
+    static func setKeyboardEnglishAutoCapitalizationEnabled(_ isEnabled: Bool) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+        defaults.set(isEnabled, forKey: keyboardEnglishAutoCapitalizationEnabledKey)
         defaults.synchronize()
     }
 

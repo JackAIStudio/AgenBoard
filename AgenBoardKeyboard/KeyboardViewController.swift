@@ -173,6 +173,7 @@ final class KeyboardViewController: UIInputViewController,
     private let selectionFeedbackGenerator = UISelectionFeedbackGenerator()
     private let voiceReadyFeedbackGenerator = UINotificationFeedbackGenerator()
     private var hapticsEnabled = true
+    private var englishAutoCapitalizationEnabled = false
     private var wasPreparingVoiceInput = false
     private var wasRecordingVoiceInput = false
     private var didRenderLiveTranscriptForCurrentSegment = false
@@ -247,6 +248,9 @@ final class KeyboardViewController: UIInputViewController,
             hasFullAccess: hasFullAccess
         )
         hapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
+        englishAutoCapitalizationEnabled =
+            SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled()
+        updateAutomaticShiftState()
         refreshQuickPhraseModuleVisibility()
         reloadPhraseModule()
         prepareHostCaptureForCurrentPresentation()
@@ -1980,6 +1984,10 @@ final class KeyboardViewController: UIInputViewController,
     }
 
     private func automaticShiftState() -> ShiftState {
+        guard englishAutoCapitalizationEnabled else {
+            return .off
+        }
+
         guard let context = textDocumentProxy.documentContextBeforeInput,
               !context.isEmpty else {
             return .once
