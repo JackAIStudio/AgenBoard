@@ -31,7 +31,7 @@ struct ContentView: View {
     ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
     @AppStorage(GettingStartedPreferences.hasSeenGuideKey)
     private var hasSeenGettingStartedGuide = false
-    @State private var aliyunConfigured = false
+    @State private var volcConfigured = false
     @State private var handledRecordingRequestIDs: Set<String> = []
     @State private var retriedFailedRecordingRequestIDs: Set<String> = []
     @State private var deferredRecordingRequestID: String?
@@ -61,7 +61,7 @@ struct ContentView: View {
     }
 
     private var selectedProviderIsReady: Bool {
-        selectedProvider == .apple || aliyunConfigured
+        selectedProvider == .apple || volcConfigured
     }
 
     private var canReturnToPreviousInterface: Bool {
@@ -259,8 +259,8 @@ struct ContentView: View {
                                     .font(.headline)
 
                                 Text(
-                                    selectedProvider.usesAliyun && !aliyunConfigured
-                                        ? "阿里云 Fun-ASR · 需要配置 API Key"
+                                    selectedProvider.usesVolc && !volcConfigured
+                                        ? "豆包流式语音识别 2.0 · 需要配置 API Key"
                                         : selectedProvider.title
                                 )
                                     .font(.caption)
@@ -812,17 +812,17 @@ struct ContentView: View {
             handleLatestSharedRecordingRequest()
         }
         .task {
-            aliyunConfigured = await Task.detached(priority: .utility) {
-                AliyunCredentialStore.hasAPIKey
+            volcConfigured = await Task.detached(priority: .utility) {
+                VolcCredentialStore.hasAPIKey
             }.value
         }
         .task {
             await loadDeferredHomeData()
         }
         .onReceive(
-            NotificationCenter.default.publisher(for: .aliyunCredentialDidChange)
+            NotificationCenter.default.publisher(for: .volcCredentialDidChange)
         ) { _ in
-            aliyunConfigured = AliyunCredentialStore.hasAPIKey
+            volcConfigured = VolcCredentialStore.hasAPIKey
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .keyboardAccessVerificationDidChange)
@@ -1140,7 +1140,7 @@ struct ContentView: View {
                 SharedCommandStore.updateRecordingRequestResponse(
                     for: request,
                     phase: .preparing,
-                    message: "正在启动麦克风和 FunASR 实时链路"
+                    message: "正在启动麦克风和豆包实时链路"
                 )
             } else {
                 recorder.startRecordingIfNeeded(request: request)

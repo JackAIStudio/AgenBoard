@@ -40,8 +40,8 @@ struct RecognitionBenchmarkResult: Codable, Equatable, Identifiable, Sendable {
     let configuredHotwordCount: Int
     let matchedTerms: [String]
     let words: [SpeechRecognitionWord]
-    let fileMetrics: AliyunFileRecognitionMetrics?
-    let realtimeMetrics: AliyunRealtimeRecognitionMetrics?
+    let fileMetrics: LegacyFileRecognitionMetrics?
+    let realtimeMetrics: RealtimeRecognitionMetrics?
 
     var id: String {
         "\(provider.rawValue)-\(mode.rawValue)"
@@ -67,8 +67,8 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
     var withoutHotwordsProvider: SpeechRecognitionProvider?
     var withHotwordsWords: [SpeechRecognitionWord]?
     var withoutHotwordsWords: [SpeechRecognitionWord]?
-    var withHotwordsRealtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
-    var withoutHotwordsRealtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
+    var withHotwordsRealtimeMetrics: RealtimeRecognitionMetrics? = nil
+    var withoutHotwordsRealtimeMetrics: RealtimeRecognitionMetrics? = nil
     var originalResult: RecognitionBenchmarkResult? = nil
     var benchmarkResults: [RecognitionBenchmarkResult]? = nil
     var lastError: String?
@@ -157,7 +157,7 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
 
     func realtimeMetrics(
         for mode: RecognitionHotwordMode
-    ) -> AliyunRealtimeRecognitionMetrics? {
+    ) -> RealtimeRecognitionMetrics? {
         switch mode {
         case .withHotwords:
             return withHotwordsRealtimeMetrics
@@ -335,8 +335,8 @@ final class RecognitionHistoryStore: ObservableObject {
         matchedTerms: [String],
         provider: SpeechRecognitionProvider,
         words: [SpeechRecognitionWord],
-        fileMetrics: AliyunFileRecognitionMetrics? = nil,
-        realtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
+        fileMetrics: LegacyFileRecognitionMetrics? = nil,
+        realtimeMetrics: RealtimeRecognitionMetrics? = nil
     ) throws {
         guard let index = items.firstIndex(where: { $0.id == itemID }) else {
             throw RecognitionHistoryError.missingItem

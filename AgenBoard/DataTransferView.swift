@@ -14,7 +14,7 @@ struct DataTransferView: View {
     @State private var isApplyingImport = false
     @State private var includeRecordings = false
     @State private var includeCredentials = false
-    @State private var aliyunConfigured = false
+    @State private var volcConfigured = false
     @State private var pinyinStatus = PinyinExportStatus.checking
     @State private var showsImporter = false
     @State private var exportArtifact: PortableExportArtifact?
@@ -93,8 +93,8 @@ struct DataTransferView: View {
                     .foregroundStyle(.secondary)
                 }
 
-                Toggle("包含阿里云 API Key", isOn: $includeCredentials)
-                    .disabled(isBusy || !aliyunConfigured)
+                Toggle("包含豆包语音 API Key", isOn: $includeCredentials)
+                    .disabled(isBusy || !volcConfigured)
 
                 if includeCredentials {
                     Label(
@@ -103,8 +103,8 @@ struct DataTransferView: View {
                     )
                     .font(.caption)
                     .foregroundStyle(.orange)
-                } else if !aliyunConfigured {
-                    Text("当前没有已保存的阿里云 API Key。")
+                } else if !volcConfigured {
+                    Text("当前没有已保存的豆包语音 API Key。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -164,7 +164,7 @@ struct DataTransferView: View {
                 )
                 DataFormatRow(
                     name: "credentials.json（可选）",
-                    detail: "仅在用户明确开启时包含明文阿里云 API Key"
+                    detail: "仅在用户明确开启时包含明文豆包语音 API Key"
                 )
                 DataFormatRow(
                     name: "recognition-history.jsonl",
@@ -230,7 +230,7 @@ struct DataTransferView: View {
 
     private func refreshExportMetadata() async {
         async let configured = Task.detached(priority: .utility) {
-            AliyunCredentialStore.hasAPIKey
+            VolcCredentialStore.hasAPIKey
         }.value
         async let learnedEntries = Task.detached(priority: .utility) {
             do {
@@ -249,7 +249,7 @@ struct DataTransferView: View {
                 return PinyinExportStatus.unavailable(error.localizedDescription)
             }
         }.value
-        aliyunConfigured = await configured
+        volcConfigured = await configured
         pinyinStatus = await learnedEntries
     }
 
@@ -440,7 +440,7 @@ private struct PortableImportPreviewView: View {
                     }
                     if preview.credentialsIncluded {
                         ImportCountRow(
-                            title: "阿里云 API Key",
+                            title: "豆包语音 API Key",
                             systemImage: "key",
                             count: 1
                         )
