@@ -26,6 +26,14 @@ final class KeyboardViewController: UIInputViewController,
         var switchTitle: String {
             self == .pinyin ? "英" : "中"
         }
+
+        var lettersTitle: String {
+            self == .pinyin ? "拼音" : "ABC"
+        }
+
+        var spaceTitle: String {
+            self == .pinyin ? "空格" : "space"
+        }
     }
 
     private enum ShiftState {
@@ -50,19 +58,38 @@ final class KeyboardViewController: UIInputViewController,
         let action: KeyAction
         let width: CGFloat
         let isUtility: Bool
+        let isPrimary: Bool
 
         init(
             _ title: String? = nil,
             systemImage: String? = nil,
             action: KeyAction,
             width: CGFloat = 1,
-            isUtility: Bool = false
+            isUtility: Bool = false,
+            isPrimary: Bool = false
         ) {
             self.title = title
             self.systemImage = systemImage
             self.action = action
             self.width = width
             self.isUtility = isUtility
+            self.isPrimary = isPrimary
+        }
+    }
+
+    private struct KeyRowSpec {
+        let keys: [KeySpec]
+        let sideInset: CGFloat
+        let edgeUtilitySpacing: CGFloat?
+
+        init(
+            _ keys: [KeySpec],
+            sideInset: CGFloat = 0,
+            edgeUtilitySpacing: CGFloat? = nil
+        ) {
+            self.keys = keys
+            self.sideInset = sideInset
+            self.edgeUtilitySpacing = edgeUtilitySpacing
         }
     }
 
@@ -129,6 +156,7 @@ final class KeyboardViewController: UIInputViewController,
     private var nextPinyinCandidateOffset = 0
     private var typingLetterButtons: [(button: UIButton, value: String)] = []
     private weak var shiftButton: UIButton?
+    private weak var returnButton: UIButton?
     private var shiftState = ShiftState.off
     private var lastShiftTapAt: TimeInterval = 0
     private var deleteRepeatTimer: Timer?
@@ -257,13 +285,19 @@ final class KeyboardViewController: UIInputViewController,
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         updateAutomaticShiftState()
+        refreshReturnKeyAppearance()
     }
 
     private func setupKeyboard() {
         view.backgroundColor = UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.12, green: 0.13, blue: 0.15, alpha: 1)
-                : UIColor(red: 0.91, green: 0.92, blue: 0.94, alpha: 1)
+                ? UIColor(red: 0.12, green: 0.13, blue: 0.14, alpha: 1)
+                : UIColor(
+                    red: 209 / 255,
+                    green: 211 / 255,
+                    blue: 218 / 255,
+                    alpha: 1
+                )
         }
 
         rootStack.axis = .vertical
@@ -357,9 +391,13 @@ final class KeyboardViewController: UIInputViewController,
             case .letters:
                 content = makeEnglishInputModeRow()
             case .numbers:
-                content = makeKeyboardModeLabel("数字与符号")
+                content = makeKeyboardModeLabel(
+                    keyboardLanguage == .pinyin ? "数字与符号" : "Numbers & Symbols"
+                )
             case .symbols:
-                content = makeKeyboardModeLabel("更多符号")
+                content = makeKeyboardModeLabel(
+                    keyboardLanguage == .pinyin ? "更多符号" : "More Symbols"
+                )
             }
         }
 
@@ -842,6 +880,7 @@ final class KeyboardViewController: UIInputViewController,
         resetPinyinCandidateHeaderReferences()
         typingLetterButtons.removeAll(keepingCapacity: true)
         shiftButton = nil
+        returnButton = nil
 
         let showsExpandedCandidates = isPinyinCandidatePanelExpanded
             && keyboardPage == .letters
@@ -867,7 +906,7 @@ final class KeyboardViewController: UIInputViewController,
         headerRow?.isHidden = false
         updateHeaderLeadingContent()
 
-        let rows: [([KeySpec], CGFloat)]
+        let rows: [KeyRowSpec]
         switch keyboardPage {
         case .letters:
             let uppercase = shiftState != .off
@@ -877,66 +916,39 @@ final class KeyboardViewController: UIInputViewController,
                 KeySpec(
                     systemImage: shiftState == .locked ? "capslock.fill" : "shift.fill",
                     action: .shift,
-                    width: 1.45,
+                    width: 1.3,
                     isUtility: true
                 )
             ] + characterSpecs("zxcvbnm", uppercase: uppercase) + [
                 KeySpec(
                     systemImage: "delete.left",
                     action: .delete,
-                    width: 1.45,
+                    width: 1.3,
                     isUtility: true
                 )
             ]
             let rowFour = [
-                KeySpec("123", action: .page(.numbers), width: 1.2, isUtility: true),
+                KeySpec("123", action: .page(.numbers), isUtility: true),
                 KeySpec(
                     keyboardLanguage.switchTitle,
                     action: .language,
-                    width: 1.05,
                     isUtility: true
                 ),
-                KeySpec("空格", action: .space, width: 5.65),
-                KeySpec(
-                    systemImage: "arrow.turn.down.left",
-                    action: .returnKey,
-                    width: 2.25,
-                    isUtility: true
-                )
+                KeySpec(keyboardLanguage.spaceTitle, action: .space, width: 4.35),
+                returnKeySpec(width: 2.1)
             ]
-            rows = [(rowOne, 0), (rowTwo, 17), (rowThree, 0), (rowFour, 0)]
+            rows = [
+                KeyRowSpec(rowOne),
+                KeyRowSpec(rowTwo, sideInset: 17),
+                KeyRowSpec(rowThree, edgeUtilitySpacing: 10),
+                KeyRowSpec(rowFour)
+            ]
 
         case .numbers:
-            rows = [
-                (characterSpecs("1234567890"), 0),
-                (inputSpecs(["-", "/", ":", ";", "(", ")", "¥", "&", "@", "\""]), 0),
-                ([
-                    KeySpec("#+=", action: .page(.symbols), width: 1.5, isUtility: true),
-                    KeySpec(".", action: .input(".")),
-                    KeySpec(",", action: .input(",")),
-                    KeySpec("?", action: .input("?")),
-                    KeySpec("!", action: .input("!")),
-                    KeySpec("'", action: .input("'")),
-                    KeySpec(systemImage: "delete.left", action: .delete, width: 1.5, isUtility: true)
-                ], 0),
-                (bottomNonLetterRow(), 0)
-            ]
+            rows = numberRows()
 
         case .symbols:
-            rows = [
-                (inputSpecs(["[", "]", "{", "}", "#", "%", "^", "*", "+", "="]), 0),
-                (inputSpecs(["_", "\\", "|", "~", "<", ">", "€", "£", "$", "•"]), 0),
-                ([
-                    KeySpec("123", action: .page(.numbers), width: 1.5, isUtility: true),
-                    KeySpec(".", action: .input(".")),
-                    KeySpec(",", action: .input(",")),
-                    KeySpec("?", action: .input("?")),
-                    KeySpec("!", action: .input("!")),
-                    KeySpec("'", action: .input("'")),
-                    KeySpec(systemImage: "delete.left", action: .delete, width: 1.5, isUtility: true)
-                ], 0),
-                (bottomNonLetterRow(), 0)
-            ]
+            rows = symbolRows()
         }
 
         keyboardModuleStack.addArrangedSubview(makeTypingSurface(rows))
@@ -1256,31 +1268,162 @@ final class KeyboardViewController: UIInputViewController,
         values.map { KeySpec($0, action: .input($0)) }
     }
 
-    private func bottomNonLetterRow() -> [KeySpec] {
-        [
-            KeySpec("ABC", action: .page(.letters), width: 1.35, isUtility: true),
-            KeySpec("空格", action: .space, width: 6.45),
-            KeySpec(
-                systemImage: "arrow.turn.down.left",
-                action: .returnKey,
-                width: 1.55,
-                isUtility: true
-            )
+    private func numberRows() -> [KeyRowSpec] {
+        let secondRow: [String]
+        let punctuation: [String]
+        let utilityWidth: CGFloat
+        let edgeSpacing: CGFloat
+
+        switch keyboardLanguage {
+        case .pinyin:
+            secondRow = ["-", "/", "：", "；", "（", "）", "¥", "@", "“", "”"]
+            punctuation = ["。", "，", "、", "？", "！", "."]
+            utilityWidth = 1.1
+            edgeSpacing = 10
+        case .english:
+            secondRow = ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""]
+            punctuation = [".", ",", "?", "!", "'"]
+            utilityWidth = 0.92
+            edgeSpacing = 14
+        }
+
+        return [
+            KeyRowSpec(characterSpecs("1234567890")),
+            KeyRowSpec(inputSpecs(secondRow)),
+            KeyRowSpec(
+                [
+                    KeySpec(
+                        "#+=",
+                        action: .page(.symbols),
+                        width: utilityWidth,
+                        isUtility: true
+                    )
+                ] + inputSpecs(punctuation) + [
+                    KeySpec(
+                        systemImage: "delete.left",
+                        action: .delete,
+                        width: utilityWidth,
+                        isUtility: true
+                    )
+                ],
+                edgeUtilitySpacing: edgeSpacing
+            ),
+            KeyRowSpec(bottomNonLetterRow())
         ]
     }
 
+    private func symbolRows() -> [KeyRowSpec] {
+        let firstRow: [String]
+        let secondRow: [String]
+        let punctuation: [String]
+        let utilityWidth: CGFloat
+        let edgeSpacing: CGFloat
+
+        switch keyboardLanguage {
+        case .pinyin:
+            firstRow = ["【", "】", "{", "}", "#", "%", "^", "*", "+", "="]
+            secondRow = ["_", "—", "\\", "|", "~", "《", "》", "$", "&", "·"]
+            punctuation = ["…", "，", "^_^", "？", "！", "、"]
+            utilityWidth = 1.1
+            edgeSpacing = 10
+        case .english:
+            firstRow = ["[", "]", "{", "}", "#", "%", "^", "*", "+", "="]
+            secondRow = ["_", "\\", "|", "~", "<", ">", "€", "£", "¥", "•"]
+            punctuation = [".", ",", "?", "!", "'"]
+            utilityWidth = 0.92
+            edgeSpacing = 14
+        }
+
+        return [
+            KeyRowSpec(inputSpecs(firstRow)),
+            KeyRowSpec(inputSpecs(secondRow)),
+            KeyRowSpec(
+                [
+                    KeySpec(
+                        "123",
+                        action: .page(.numbers),
+                        width: utilityWidth,
+                        isUtility: true
+                    )
+                ] + inputSpecs(punctuation) + [
+                    KeySpec(
+                        systemImage: "delete.left",
+                        action: .delete,
+                        width: utilityWidth,
+                        isUtility: true
+                    )
+                ],
+                edgeUtilitySpacing: edgeSpacing
+            ),
+            KeyRowSpec(bottomNonLetterRow())
+        ]
+    }
+
+    private func bottomNonLetterRow() -> [KeySpec] {
+        [
+            KeySpec(
+                keyboardLanguage.lettersTitle,
+                action: .page(.letters),
+                isUtility: true
+            ),
+            KeySpec(keyboardLanguage.spaceTitle, action: .space, width: 2.07),
+            returnKeySpec()
+        ]
+    }
+
+    private func returnKeySpec(width: CGFloat = 1) -> KeySpec {
+        KeySpec(
+            returnKeyTitle,
+            action: .returnKey,
+            width: width,
+            isUtility: true,
+            isPrimary: isPrimaryReturnKey
+        )
+    }
+
+    private var returnKeyTitle: String {
+        switch (keyboardLanguage, textDocumentProxy.returnKeyType) {
+        case (.pinyin, .go): return "前往"
+        case (.pinyin, .join): return "加入"
+        case (.pinyin, .next): return "下一项"
+        case (.pinyin, .route): return "路线"
+        case (.pinyin, .search): return "搜索"
+        case (.pinyin, .send): return "发送"
+        case (.pinyin, .done): return "完成"
+        case (.pinyin, .continue): return "继续"
+        case (.pinyin, _): return "换行"
+        case (.english, .go): return "go"
+        case (.english, .join): return "join"
+        case (.english, .next): return "next"
+        case (.english, .route): return "route"
+        case (.english, .search): return "search"
+        case (.english, .send): return "send"
+        case (.english, .done): return "done"
+        case (.english, .continue): return "continue"
+        case (.english, _): return "return"
+        }
+    }
+
+    private var isPrimaryReturnKey: Bool {
+        textDocumentProxy.returnKeyType != .default
+    }
+
     private func makeTypingSurface(
-        _ rows: [([KeySpec], CGFloat)]
+        _ rows: [KeyRowSpec]
     ) -> KeyboardTypingSurfaceView {
         let surface = KeyboardTypingSurfaceView()
         surface.translatesAutoresizingMaskIntoConstraints = false
 
         var spaceButton: UIButton?
-        for (specs, sideInset) in rows {
-            let row = makeTypingRow(specs, sideInset: sideInset + 8)
+        for rowSpec in rows {
+            let row = makeTypingRow(
+                rowSpec.keys,
+                sideInset: rowSpec.sideInset + 4,
+                edgeUtilitySpacing: rowSpec.edgeUtilitySpacing
+            )
             surface.addRow(row.view, buttons: row.buttons)
 
-            for (spec, button) in zip(specs, row.buttons) {
+            for (spec, button) in zip(rowSpec.keys, row.buttons) {
                 if case .space = spec.action {
                     spaceButton = button
                 }
@@ -1312,17 +1455,22 @@ final class KeyboardViewController: UIInputViewController,
 
     private func makeTypingRow(
         _ specs: [KeySpec],
-        sideInset: CGFloat
+        sideInset: CGFloat,
+        edgeUtilitySpacing: CGFloat?
     ) -> (view: UIView, buttons: [UIButton]) {
         let stack = UIStackView()
         stack.axis = .horizontal
         stack.alignment = .fill
         stack.distribution = .fill
-        stack.spacing = 5
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let buttons = specs.map(makeTypingKey)
         buttons.forEach(stack.addArrangedSubview)
+        if let edgeUtilitySpacing, buttons.count > 2 {
+            stack.setCustomSpacing(edgeUtilitySpacing, after: buttons[0])
+            stack.setCustomSpacing(edgeUtilitySpacing, after: buttons[buttons.count - 2])
+        }
 
         if let referenceButton = buttons.first,
            let referenceWidth = specs.first?.width {
@@ -1351,13 +1499,16 @@ final class KeyboardViewController: UIInputViewController,
         configuration.title = spec.title
         configuration.image = spec.systemImage.flatMap { UIImage(systemName: $0) }
         configuration.preferredSymbolConfigurationForImage = .init(
-            pointSize: 16,
+            pointSize: 18,
             weight: .medium
         )
-        configuration.baseBackgroundColor = spec.isUtility ? .systemGray4 : .systemBackground
-        configuration.baseForegroundColor = .label
-        configuration.cornerStyle = .medium
+        configuration.baseBackgroundColor = spec.isPrimary
+            ? .systemBlue
+            : (spec.isUtility ? utilityKeyBackgroundColor : .systemBackground)
+        configuration.baseForegroundColor = spec.isPrimary ? .white : .label
+        configuration.cornerStyle = .fixed
         configuration.contentInsets = .zero
+        configuration.background.cornerRadius = 5
 
         if case .shift = spec.action, shiftState != .off {
             configuration.baseBackgroundColor = .label
@@ -1365,11 +1516,21 @@ final class KeyboardViewController: UIInputViewController,
         }
 
         let button = UIButton(configuration: configuration)
-        button.titleLabel?.font = .systemFont(ofSize: 17, weight: .regular)
+        let titleSize: CGFloat
+        if case .input = spec.action {
+            titleSize = keyboardPage == .letters ? 22 : 20
+        } else {
+            titleSize = 16
+        }
+        button.titleLabel?.font = .systemFont(ofSize: titleSize, weight: .regular)
         button.titleLabel?.numberOfLines = 1
         button.titleLabel?.lineBreakMode = .byClipping
         button.titleLabel?.adjustsFontSizeToFitWidth = true
         button.titleLabel?.minimumScaleFactor = 0.82
+        button.layer.shadowColor = UIColor.black.cgColor
+        button.layer.shadowOpacity = 0.18
+        button.layer.shadowOffset = CGSize(width: 0, height: 1)
+        button.layer.shadowRadius = 0.35
         addHapticFeedback(to: button)
 
         switch spec.action {
@@ -1394,13 +1555,14 @@ final class KeyboardViewController: UIInputViewController,
 
         case .space:
             button.addTarget(self, action: #selector(insertSpace), for: .touchUpInside)
-            button.accessibilityLabel = "空格"
+            button.accessibilityLabel = keyboardLanguage.spaceTitle
             button.accessibilityHint = "轻点输入空格，长按并拖动可移动光标"
             configureCursorTracking(on: button)
 
         case .returnKey:
             button.addTarget(self, action: #selector(insertReturn), for: .touchUpInside)
-            button.accessibilityLabel = "换行"
+            button.accessibilityLabel = returnKeyTitle
+            returnButton = button
 
         case .language:
             button.addTarget(self, action: #selector(toggleKeyboardLanguage), for: .touchUpInside)
@@ -1417,6 +1579,33 @@ final class KeyboardViewController: UIInputViewController,
         }
 
         return button
+    }
+
+    private var utilityKeyBackgroundColor: UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.31, green: 0.32, blue: 0.35, alpha: 1)
+                : UIColor(
+                    red: 174 / 255,
+                    green: 180 / 255,
+                    blue: 191 / 255,
+                    alpha: 1
+                )
+        }
+    }
+
+    private func refreshReturnKeyAppearance() {
+        guard let returnButton else {
+            return
+        }
+        var configuration = returnButton.configuration
+        configuration?.title = returnKeyTitle
+        configuration?.baseBackgroundColor = isPrimaryReturnKey
+            ? .systemBlue
+            : utilityKeyBackgroundColor
+        configuration?.baseForegroundColor = isPrimaryReturnKey ? .white : .label
+        returnButton.configuration = configuration
+        returnButton.accessibilityLabel = returnKeyTitle
     }
 
     private func refreshShiftAppearance() {
@@ -1438,7 +1627,7 @@ final class KeyboardViewController: UIInputViewController,
                 systemName: shiftState == .locked ? "capslock.fill" : "shift.fill"
             )
             configuration?.baseBackgroundColor = shiftState == .off
-                ? .systemGray4
+                ? utilityKeyBackgroundColor
                 : .label
             configuration?.baseForegroundColor = shiftState == .off
                 ? .label
