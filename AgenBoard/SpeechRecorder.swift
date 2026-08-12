@@ -22,9 +22,8 @@ final class SpeechRecorder: ObservableObject {
         let configuredHotwordCount: Int
         let launchRequest: SharedRecordingToggleRequest?
         let deliveryRequest: SharedRecordingToggleRequest?
-        let realtimeSession: AliyunRealtimeSpeechSession?
+        let realtimeSession: VolcRealtimeSpeechSession?
         let realtimeAudioSendingTask: Task<Void, Error>?
-        let realtimeVocabulary: AliyunVocabularySetup?
         let recordingDuration: TimeInterval
         let firstSignificantAudioTime: TimeInterval?
         let lastSignificantAudioTime: TimeInterval?
@@ -49,9 +48,8 @@ final class SpeechRecorder: ObservableObject {
     private let historyStore: RecognitionHistoryStore
     private lazy var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
     private var recorder: AVAudioRecorder?
-    private var realtimeCapture: AliyunRealtimeAudioCapture?
-    private var realtimeSession: AliyunRealtimeSpeechSession?
-    private var currentRealtimeVocabulary: AliyunVocabularySetup?
+    private var realtimeCapture: RealtimeAudioCapture?
+    private var realtimeSession: VolcRealtimeSpeechSession?
     private var realtimeAudioSendingTask: Task<Void, Error>?
     private var livePreviewRecognitionRequest:
         SFSpeechAudioBufferRecognitionRequest?
@@ -82,8 +80,8 @@ final class SpeechRecorder: ObservableObject {
     private var lastSignificantAudioTime: TimeInterval?
     private var significantAudioDuration = 0.0
     private var lastRealtimeMeterDuration = 0.0
-    private let aliyunRealtimePacketByteCount = 3_200
-    private let aliyunRealtimeBytesPerSecond = 32_000
+    private let realtimePacketByteCount = 3_200
+    private let realtimeBytesPerSecond = 32_000
     private let significantAudioThresholdDecibels = -42.0
     private let retryableAudioSessionActivationErrorCodes: Set<Int> = [
         560_557_684, // AVAudioSessionErrorCodeCannotInterruptOthers ('!int')
@@ -179,7 +177,7 @@ final class SpeechRecorder: ObservableObject {
         publishRequestResponse(
             for: request,
             phase: .preparing,
-            message: "正在启动麦克风和 FunASR 实时链路"
+            message: "正在启动麦克风和豆包实时链路"
         )
         recordingStartTask?.cancel()
         let startID = UUID()
@@ -250,7 +248,6 @@ final class SpeechRecorder: ObservableObject {
         stopAppleLivePreview()
         realtimeSession?.cancel()
         realtimeSession = nil
-        currentRealtimeVocabulary = nil
         realtimeCapture?.stop()
         realtimeCapture = nil
         if let discardedActiveRecordingURL {
@@ -301,7 +298,6 @@ final class SpeechRecorder: ObservableObject {
         stopAppleLivePreview()
         realtimeSession?.cancel()
         realtimeSession = nil
-        currentRealtimeVocabulary = nil
         recordingStartTask?.cancel()
         recordingStartTask = nil
         recordingStartID = nil
@@ -365,12 +361,12 @@ final class SpeechRecorder: ObservableObject {
             // a stale insertion request left by an earlier keyboard session.
             SharedCommandStore.cancelKeyboardAutoInsert()
         }
-        if currentProvider.usesAliyun {
+        if currentProvider.usesVolc {
             do {
-                _ = try AliyunSpeechConfiguration.load()
+                _ = try VolcSpeechConfiguration.load()
             } catch {
                 SharedCommandStore.cancelKeyboardAutoInsert()
-                let message = "阿里云配置不可用：\(error.localizedDescription)"
+                let message = "豆包语音配置不可用：\(error.localizedDescription)"
                 status = message
                 publishRequestResponse(for: request, phase: .failed, message: message)
                 showError(message)
@@ -412,7 +408,6 @@ final class SpeechRecorder: ObservableObject {
         activeSegmentID = segmentID
         transcript = ""
         realtimeTranscriptIsFinal = false
-        currentRealtimeVocabulary = nil
         SharedCommandStore.clearRecognitionResult()
         lastRecordingFileSize = 0
         recordingDuration = 0
@@ -447,8 +442,8 @@ final class SpeechRecorder: ObservableObject {
             startingRecordingURL = url
             pendingRecordingURL = url
 
-            if currentProvider == .aliyunRealtime {
-                try await startAliyunRealtimeCapture(
+            if currentProvider == .volcRealtime {
+                try await startVolcRealtimeCapture(
                     at: url,
                     segmentID: segmentID,
                     request: request
@@ -491,8 +486,8 @@ final class SpeechRecorder: ObservableObject {
             pendingRecordingURL = nil
             isPreparingRecording = false
             isRecording = true
-            status = currentProvider == .aliyunRealtime
-                ? "可以说话 · FunASR 实时链路已就绪"
+            status = currentProvider == .volcRealtime
+                ? "可以说话 · 豆包实时链路已就绪"
                 : "可以说话 · 正在录音"
             publishRecordingSnapshot(status: status)
             startMetering()
@@ -575,7 +570,7 @@ final class SpeechRecorder: ObservableObject {
         currentConfiguredHotwordCount = currentActiveHotwords.count
     }
 
-    private func startAliyunRealtimeCapture(
+    private func startVolcRealtimeCapture(
         at url: URL,
         segmentID: UUID,
         request: SharedRecordingToggleRequest?
@@ -589,7 +584,7 @@ final class SpeechRecorder: ObservableObject {
         let (audioStream, continuation) = AsyncStream<Data>.makeStream(
             bufferingPolicy: .unbounded
         )
-        let capture = try AliyunRealtimeAudioCapture(
+        let capture = try RealtimeAudioCapture(
             fileURL: url,
             audioContinuation: continuation
         ) { [weak self] decibels, duration in
@@ -608,24 +603,12 @@ final class SpeechRecorder: ObservableObject {
             request: request
         )
 
-        status = "麦克风已启动 · 正在准备 FunASR 实时链路"
+        status = "麦克风已启动 · 正在准备豆包实时链路"
         publishRecordingSnapshot(status: status)
-        let vocabulary = try await AliyunSpeechTranscriber.prepareVocabulary(
+        let session = VolcRealtimeSpeechSession(
+            configuration: try VolcSpeechConfiguration.load(),
             hotwords: currentActiveHotwords,
-            target: .realtime
-        )
-        try Task.checkCancellation()
-        currentConfiguredHotwordCount = vocabulary.acceptedTerms.count
-        currentRealtimeVocabulary = vocabulary
-        RecordingLaunchMetrics.mark(
-            "main_realtime_vocabulary_ready",
-            request: request,
-            detail: "accepted_terms=\(vocabulary.acceptedTerms.count)"
-        )
-
-        let session = AliyunRealtimeSpeechSession(
-            configuration: try AliyunSpeechConfiguration.load(),
-            vocabulary: vocabulary,
+            transcriptionMode: SpeechServicePreferences.volcRealtimeTranscriptionMode,
             launchRequest: request
         ) { [weak self] text, isFinal in
             guard let self,
@@ -636,16 +619,16 @@ final class SpeechRecorder: ObservableObject {
             self.transcript = SpeechTranscriptNormalizer.normalize(text)
             self.realtimeTranscriptIsFinal = isFinal
             if self.isPreparingRecording {
-                self.status = "正在准备 · FunASR 已收到缓存音频"
+                self.status = "正在准备 · 豆包已收到缓存音频"
             } else {
                 self.status = isFinal
-                    ? "正在录音 · FunASR 已生成句子"
-                    : "正在录音 · FunASR 实时转写中"
+                    ? "正在录音 · 豆包已生成确定句"
+                    : "正在录音 · 豆包实时转写中"
             }
             self.publishRecordingSnapshot(status: self.status)
         }
         realtimeSession = session
-        status = "麦克风正在缓存 · 正在连接 FunASR"
+        status = "麦克风正在缓存 · 正在连接豆包语音"
         publishRecordingSnapshot(status: status)
         try await session.connect()
         RecordingLaunchMetrics.mark(
@@ -663,7 +646,7 @@ final class SpeechRecorder: ObservableObject {
             }
 
             do {
-                try await self.sendAliyunRealtimeAudioStream(
+                try await self.sendVolcRealtimeAudioStream(
                     audioStream,
                     to: session,
                     capture: capture,
@@ -672,7 +655,7 @@ final class SpeechRecorder: ObservableObject {
             } catch {
                 if !Task.isCancelled,
                    self.isPreparingRecording || self.isRecording {
-                    self.status = "FunASR 实时连接异常"
+                    self.status = "豆包实时连接异常"
                     self.publishRecordingSnapshot(status: self.status)
                 }
                 throw error
@@ -737,7 +720,7 @@ final class SpeechRecorder: ObservableObject {
         }
 
         do {
-            let capture = try AliyunRealtimeAudioCapture(
+            let capture = try RealtimeAudioCapture(
                 fileURL: url,
                 audioBufferHandler: { [weak recognitionRequest] buffer in
                     recognitionRequest?.append(buffer)
@@ -763,14 +746,14 @@ final class SpeechRecorder: ObservableObject {
     }
 
     private func waitForRealtimeFirstAudioFrame(
-        capture: AliyunRealtimeAudioCapture,
+        capture: RealtimeAudioCapture,
         request: SharedRecordingToggleRequest?
     ) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 2
         while capture.capturedPCMByteCount == 0 {
             try Task.checkCancellation()
             guard ProcessInfo.processInfo.systemUptime < deadline else {
-                throw AliyunSpeechServiceError.timeout(
+                throw VolcSpeechServiceError.timeout(
                     "麦克风已启动，但没有收到有效音频帧。"
                 )
             }
@@ -783,10 +766,10 @@ final class SpeechRecorder: ObservableObject {
         )
     }
 
-    private func sendAliyunRealtimeAudioStream(
+    private func sendVolcRealtimeAudioStream(
         _ audioStream: AsyncStream<Data>,
-        to session: AliyunRealtimeSpeechSession,
-        capture: AliyunRealtimeAudioCapture,
+        to session: VolcRealtimeSpeechSession,
+        capture: RealtimeAudioCapture,
         request: SharedRecordingToggleRequest?
     ) async throws {
         var pending = Data()
@@ -810,7 +793,7 @@ final class SpeechRecorder: ObservableObject {
             let backlog = max(
                 0,
                 Double(sourceCapturedByteCount - speechPacketByteCount)
-                    / Double(aliyunRealtimeBytesPerSecond)
+                    / Double(realtimeBytesPerSecond)
             )
             maximumBacklog = max(maximumBacklog, backlog)
 
@@ -832,11 +815,11 @@ final class SpeechRecorder: ObservableObject {
             try Task.checkCancellation()
             capturedByteCount += data.count
             pending.append(data)
-            while pending.count >= aliyunRealtimePacketByteCount {
+            while pending.count >= realtimePacketByteCount {
                 let packet = Data(
-                    pending.prefix(aliyunRealtimePacketByteCount)
+                    pending.prefix(realtimePacketByteCount)
                 )
-                pending.removeFirst(aliyunRealtimePacketByteCount)
+                pending.removeFirst(realtimePacketByteCount)
                 try await sendPacket(packet)
             }
         }
@@ -845,7 +828,7 @@ final class SpeechRecorder: ObservableObject {
         // 不丢弃任何真实采样，并保证服务端收到均匀的 3,200 字节帧。
         if !pending.isEmpty {
             pending.append(
-                Data(count: aliyunRealtimePacketByteCount - pending.count)
+                Data(count: realtimePacketByteCount - pending.count)
             )
             try await sendPacket(pending)
         }
@@ -854,8 +837,8 @@ final class SpeechRecorder: ObservableObject {
         let sourceCapturedByteCount = capture.capturedPCMByteCount
         guard capturedByteCount == sourceCapturedByteCount,
               paddingByteCount >= 0,
-              paddingByteCount < aliyunRealtimePacketByteCount else {
-            throw AliyunSpeechServiceError.invalidResponse(
+              paddingByteCount < realtimePacketByteCount else {
+            throw VolcSpeechServiceError.invalidResponse(
                 "实时音频完整性校验失败：采集与发送字节数不一致。"
             )
         }
@@ -875,7 +858,6 @@ final class SpeechRecorder: ObservableObject {
                 "invariant=passed"
             ].joined(separator: " ")
         )
-        try await session.sendEndOfSpeechPadding()
     }
 
     private func activateAudioSessionWithRetry(
@@ -912,7 +894,6 @@ final class SpeechRecorder: ObservableObject {
         let sourceRecordingURL = recordingURL
         let capturedRealtimeSession = realtimeSession
         let capturedAudioSendingTask = realtimeAudioSendingTask
-        let capturedRealtimeVocabulary = currentRealtimeVocabulary
         let capturedLiveTranscript = transcript
         let capturedProvider = currentProvider
         let capturedRecognitionMode = currentRecognitionMode
@@ -927,13 +908,13 @@ final class SpeechRecorder: ObservableObject {
         let shouldDeliverResultToKeyboard = deliverResultToKeyboard
             ?? SharedCommandStore.isKeyboardAutoInsertPending()
 
-        if currentProvider == .aliyunRealtime || currentProvider == .apple {
+        if currentProvider == .volcRealtime || currentProvider == .apple {
             if let realtimeCapture {
                 realtimeCapture.stop()
                 recordingDuration = max(
                     recordingDuration,
                     Double(realtimeCapture.capturedPCMByteCount)
-                        / Double(aliyunRealtimeBytesPerSecond)
+                        / Double(realtimeBytesPerSecond)
                 )
             }
             realtimeCapture = nil
@@ -974,7 +955,6 @@ final class SpeechRecorder: ObservableObject {
 
         realtimeSession = nil
         realtimeAudioSendingTask = nil
-        currentRealtimeVocabulary = nil
         currentLaunchRequest = nil
         activeSegmentID = nil
 
@@ -997,7 +977,6 @@ final class SpeechRecorder: ObservableObject {
             deliveryRequest: deliveryRequest,
             realtimeSession: capturedRealtimeSession,
             realtimeAudioSendingTask: capturedAudioSendingTask,
-            realtimeVocabulary: capturedRealtimeVocabulary,
             recordingDuration: max(
                 capturedRecordingDuration,
                 recordingDuration
@@ -1075,15 +1054,15 @@ final class SpeechRecorder: ObservableObject {
 
     private func runFinalization(_ job: FinalizationJob) async {
         switch job.provider {
-        case .aliyun:
+        case .aliyun, .aliyunRealtime:
             failFinalization(
                 job,
-                message: "阿里云文件版仅用于识别历史，请重新选择日常识别服务。",
+                message: "旧版阿里云识别已停用，请重新使用豆包实时识别。",
                 presentsError: true
             )
             finishFinalization(job)
-        case .aliyunRealtime:
-            await finishAliyunRealtimeFinalization(job)
+        case .volcRealtime:
+            await finishVolcRealtimeFinalization(job)
         case .apple:
             if #available(iOS 26.0, *) {
                 await finishAppleFinalization(job)
@@ -1093,7 +1072,7 @@ final class SpeechRecorder: ObservableObject {
         }
     }
 
-    private func finishAliyunRealtimeFinalization(
+    private func finishVolcRealtimeFinalization(
         _ job: FinalizationJob
     ) async {
         defer {
@@ -1107,13 +1086,13 @@ final class SpeechRecorder: ObservableObject {
             }
             try Task.checkCancellation()
             guard let session = job.realtimeSession else {
-                throw AliyunSpeechServiceError.taskFailed(
-                    "阿里云实时识别会话不存在，请重新录音后再试。"
+                throw VolcSpeechServiceError.taskFailed(
+                    "豆包实时识别会话不存在，请重新录音后再试。"
                 )
             }
             updateFinalizationStatus(
                 job,
-                message: "本段已保存 · 正在请求阿里实时最终结果"
+                message: "本段已保存 · 正在请求豆包二遍终稿"
             )
 
             var output = try await session.finish()
@@ -1138,12 +1117,11 @@ final class SpeechRecorder: ObservableObject {
                 )
                 let recoveryStartedAt = Date()
                 do {
-                    let recovered = try await AliyunRealtimeSpeechTranscriber.transcribe(
+                    let recovered = try await VolcRealtimeSpeechTranscriber.transcribe(
                         audioURL: job.audioURL,
                         hotwords: job.activeHotwords,
                         playbackRate: 1.5,
-                        launchRequest: job.launchRequest,
-                        preparedVocabulary: job.realtimeVocabulary
+                        launchRequest: job.launchRequest
                     ) { [weak self] progress in
                         self?.updateFinalizationStatus(job, message: progress)
                     }
@@ -1200,14 +1178,14 @@ final class SpeechRecorder: ObservableObject {
             }
             if !output.serviceOutput.ignoredHotwords.isEmpty {
                 notes.append(
-                    "另有 \(output.serviceOutput.ignoredHotwords.count) 个词不符合阿里热词格式限制"
+                    "另有 \(output.serviceOutput.ignoredHotwords.count) 个词超出豆包请求级热词限制"
                 )
             }
             completeFinalization(
                 job,
                 text: output.serviceOutput.transcript,
                 elapsed: output.metrics.finalizationElapsed,
-                provider: .aliyunRealtime,
+                provider: .volcRealtime,
                 configuredHotwordCount:
                     output.serviceOutput.configuredHotwordCount,
                 words: output.serviceOutput.words,
@@ -1220,7 +1198,7 @@ final class SpeechRecorder: ObservableObject {
             job.realtimeSession?.cancel()
             failFinalization(
                 job,
-                message: "阿里云实时识别失败：\(error.localizedDescription)",
+                message: "豆包实时识别失败：\(error.localizedDescription)",
                 presentsError: true
             )
         }
@@ -1244,32 +1222,38 @@ final class SpeechRecorder: ObservableObject {
             .map { Double($0) / 1_000 }
         let lastWord = output.words.map(\.endTimeMilliseconds).max()
             .map { Double($0) / 1_000 }
+        let hasWordTiming = firstWord != nil && lastWord != nil
         let prefixGap = firstWord.map {
             max(0, $0 - speechStart)
-        } ?? speechSpan
+        } ?? 0
         let suffixGap = lastWord.map {
             max(0, speechEnd - $0)
-        } ?? speechSpan
+        } ?? 0
         let recognizedSpan: TimeInterval
         if let firstWord, let lastWord {
             recognizedSpan = max(0, lastWord - firstWord)
         } else {
             recognizedSpan = 0
         }
-        let coverage = speechSpan > 0
-            ? min(1, recognizedSpan / speechSpan)
-            : (normalizedTranscript.isEmpty ? 0 : 1)
+        let coverage: Double
+        if hasWordTiming, speechSpan > 0 {
+            coverage = min(1, recognizedSpan / speechSpan)
+        } else {
+            // SeedASR 的部分响应只包含整句文本，不保证附带词级时间戳。
+            // 此时不能把“没有时间戳”等同于“只识别了 0%”，否则长录音会无谓重试。
+            coverage = normalizedTranscript.isEmpty ? 0 : 1
+        }
         var reasons: [String] = []
         if normalizedTranscript.isEmpty, job.significantAudioDuration > 0.5 {
             reasons.append("empty_transcript")
         }
-        if speechSpan > 4, coverage < 0.35 {
+        if hasWordTiming, speechSpan > 4, coverage < 0.35 {
             reasons.append("low_coverage")
         }
-        if speechSpan > 4, prefixGap > 3.5, coverage < 0.65 {
+        if hasWordTiming, speechSpan > 4, prefixGap > 3.5, coverage < 0.65 {
             reasons.append("prefix_gap")
         }
-        if speechSpan > 4, suffixGap > 3.5, coverage < 0.65 {
+        if hasWordTiming, speechSpan > 4, suffixGap > 3.5, coverage < 0.65 {
             reasons.append("suffix_gap")
         }
 
@@ -1286,6 +1270,7 @@ final class SpeechRecorder: ObservableObject {
             String(format: "speech_end=%.3f", speechEnd),
             String(format: "recognized_start=%.3f", firstWord ?? -1),
             String(format: "recognized_end=%.3f", lastWord ?? -1),
+            "has_word_timing=\(hasWordTiming ? 1 : 0)",
             String(format: "coverage=%.3f", coverage),
             "chars=\(normalizedTranscript.count)",
             "words=\(output.words.count)"
@@ -1399,8 +1384,8 @@ final class SpeechRecorder: ObservableObject {
         provider: SpeechRecognitionProvider,
         configuredHotwordCount: Int,
         words: [SpeechRecognitionWord],
-        fileMetrics: AliyunFileRecognitionMetrics? = nil,
-        realtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil,
+        fileMetrics: LegacyFileRecognitionMetrics? = nil,
+        realtimeMetrics: RealtimeRecognitionMetrics? = nil,
         completionNote: String = ""
     ) {
         let normalizedTranscript = SpeechTranscriptNormalizer.normalize(text)

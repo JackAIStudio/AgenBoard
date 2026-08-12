@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 struct SpeechServiceSettingsView: View {
-    private static let aliyunAPIKeyManagementURL = URL(
-        string: "https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key"
+    private static let volcAPIKeyManagementURL = URL(
+        string: "https://console.volcengine.com/speech/new/"
     )!
     private static let privacyURL = URL(
         string: "https://github.com/JackAIStudio/AgenBoard/blob/main/PRIVACY.md"
@@ -13,9 +13,18 @@ struct SpeechServiceSettingsView: View {
         SpeechServicePreferences.providerKey,
         store: SpeechServicePreferences.defaults
     ) private var providerRawValue = SpeechRecognitionProvider.apple.rawValue
+    @AppStorage(
+        SpeechServicePreferences.volcRealtimeTranscriptionModeKey,
+        store: SpeechServicePreferences.defaults
+    ) private var volcRealtimeTranscriptionModeRawValue =
+        VolcRealtimeTranscriptionMode.naturalDictation.rawValue
+    @AppStorage(
+        SpeechServicePreferences.volcResourceIDKey,
+        store: SpeechServicePreferences.defaults
+    ) private var resourceID = SpeechServicePreferences.defaultVolcResourceID
 
     @State private var apiKeyDraft = ""
-    @State private var hasStoredAPIKey = AliyunCredentialStore.hasAPIKey
+    @State private var hasStoredAPIKey = VolcCredentialStore.hasAPIKey
     @State private var isAPIKeyVisible = false
     @State private var statusMessage = ""
     @State private var showsError = false
@@ -23,6 +32,12 @@ struct SpeechServiceSettingsView: View {
 
     private var provider: SpeechRecognitionProvider {
         (SpeechRecognitionProvider(rawValue: providerRawValue) ?? .apple).primaryProvider
+    }
+
+    private var volcRealtimeTranscriptionMode: VolcRealtimeTranscriptionMode {
+        VolcRealtimeTranscriptionMode(
+            rawValue: volcRealtimeTranscriptionModeRawValue
+        ) ?? .naturalDictation
     }
 
     var body: some View {
@@ -34,6 +49,35 @@ struct SpeechServiceSettingsView: View {
                 Text("选择识别服务")
             } footer: {
                 Text("选择会立即生效。你可以随时回来切换，不会影响已经保存的识别历史。")
+            }
+
+            if provider == .volcRealtime {
+                Section {
+                    Picker(
+                        "断句方式",
+                        selection: $volcRealtimeTranscriptionModeRawValue
+                    ) {
+                        ForEach(VolcRealtimeTranscriptionMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(volcRealtimeTranscriptionMode.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Label(
+                        "停止录音后会请求非流式二遍识别结果作为最终文本",
+                        systemImage: "waveform.path"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } header: {
+                    Text("豆包实时断句")
+                } footer: {
+                    Text("自然听写与 JackVoice 默认行为一致；低延迟模式会向服务端传入 1300 ms 停顿判停参数。")
+                }
             }
 
             Section("项目的数据边界") {
@@ -68,7 +112,7 @@ struct SpeechServiceSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text("如果结果受方言、噪声或专业词影响，可以先完善热词词库；仍不理想时，再切换到阿里云进行同一段录音的识别。")
+                    Text("如果结果受方言、噪声或专业词影响，可以先完善热词词库；仍不理想时，再使用豆包实时识别重新转写同一段录音。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -78,9 +122,9 @@ struct SpeechServiceSettingsView: View {
                     HStack {
                         Group {
                             if isAPIKeyVisible {
-                                TextField("粘贴百炼 API Key", text: $apiKeyDraft)
+                                TextField("粘贴豆包语音 API Key", text: $apiKeyDraft)
                             } else {
-                                SecureField("粘贴百炼 API Key", text: $apiKeyDraft)
+                                SecureField("粘贴豆包语音 API Key", text: $apiKeyDraft)
                             }
                         }
                         .textInputAutocapitalization(.never)
@@ -105,9 +149,9 @@ struct SpeechServiceSettingsView: View {
                             .foregroundStyle(.orange)
                     }
 
-                    Link(destination: Self.aliyunAPIKeyManagementURL) {
+                    Link(destination: Self.volcAPIKeyManagementURL) {
                         Label(
-                            hasStoredAPIKey ? "管理百炼 API Key" : "前往百炼创建 API Key",
+                            hasStoredAPIKey ? "管理豆包语音 API Key" : "前往火山引擎开通服务",
                             systemImage: "arrow.up.right.square"
                         )
                     }
@@ -123,18 +167,15 @@ struct SpeechServiceSettingsView: View {
                         .disabled(apiKeyDraft.isEmpty)
                     }
 
-                    Label("服务地域：华北 2（北京）", systemImage: "mappin.and.ellipse")
-                        .font(.callout)
+                    TextField("资源 ID", text: $resourceID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
 
-                    Text("当前版本固定使用华北 2（北京）的 DashScope 接入点，无需填写 Workspace ID。其他地域创建的 API Key 无法在当前版本中使用。")
+                    Text("默认资源 ID 为 `volc.seedasr.sauc.duration`，对应豆包流式语音识别模型 2.0 小时版。除非火山控制台为你的账号给出了其他值，否则保持默认。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Text("新创建的 API Key 明文只在阿里云控制台显示一次，请创建后立即复制并妥善保存。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Button("保存阿里云配置") {
+                    Button("保存豆包语音配置") {
                         saveConfiguration()
                     }
 
@@ -157,15 +198,15 @@ struct SpeechServiceSettingsView: View {
                         }
                     }
             } header: {
-                Text("阿里云百炼")
+                Text("火山引擎 · 豆包语音")
             } footer: {
-                if provider == .aliyunRealtime {
+                if provider == .volcRealtime {
                     Text(
-                        "实时版会在录音时通过 WebSocket 将 PCM 音频流直接发送到 fun-asr-realtime，停止后只等待最终句子收尾；本地仍保存一份录音用于回放。启用热词时会同步当前最多 100 个激活词。历史录音可在“识别历史”中按需使用文件版重新转写或恢复失败结果。API Key 默认只保存在本机钥匙串，仅在你主动选择导出时才会进入数据包。"
+                        "录音时会通过 WebSocket 将 16 kHz 单声道 PCM 直接发送到豆包双向流式优化版，实时显示一遍结果，停止后用二遍结果生成终稿。本地仍保存录音用于回放和重转写；API Key 默认只保存在本机钥匙串。"
                     )
                 } else {
                     Text(
-                        "Apple 仍是当前日常识别服务。保存 API Key 不会改变这个选择；它只会让你可以在“识别历史”中按需使用阿里云文件版重新转写，或以后切换到阿里实时版。API Key 默认只保存在本机钥匙串，仅在你主动选择导出时才会进入数据包。"
+                        "Apple 仍是当前日常识别服务。保存 API Key 不会改变这个选择；它只会让你可以在识别历史中使用豆包实时接口重新转写，或以后切换日常识别服务。"
                     )
                 }
             }
@@ -175,13 +216,13 @@ struct SpeechServiceSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if provider.usesAliyun {
-                    Text("实时录音、已启用热词和识别请求只会直接发送到阿里云，并受你与阿里云之间的服务条款约束；产生的调用费用计入你自己的百炼账号。")
+                if provider.usesVolc {
+                    Text("实时录音、请求级热词和识别参数只会直接发送到火山引擎，并受你与火山引擎之间的服务条款约束；调用费用计入你自己的账号。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Text("只有你在识别历史中主动发起文件版重新转写时，保存的完整录音才会上传至阿里云。AgenBoard 不会自动回退或产生第二次调用。删除本机 API Key 后，历史文本和原音频仍保留，但无法继续调用阿里云服务。")
+                Text("历史重转写也使用同一条流式链路按录音时长推送，不上传临时文件。删除本机 API Key 后，历史文本和原音频仍保留，但无法继续调用豆包语音服务。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -210,21 +251,23 @@ struct SpeechServiceSettingsView: View {
         do {
             let key = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else {
-                throw AliyunSpeechServiceError.configuration(
+                throw VolcSpeechServiceError.configuration(
                     "API Key 不能为空；如需移除，请使用“删除本机 API Key”。"
                 )
             }
-            let storedKey = try AliyunCredentialStore.apiKey() ?? ""
+            let storedKey = try VolcCredentialStore.apiKey() ?? ""
             if key != storedKey {
-                try AliyunCredentialStore.saveAPIKey(key)
+                try VolcCredentialStore.saveAPIKey(key)
             }
+            SpeechServicePreferences.volcResourceID = resourceID
+            resourceID = SpeechServicePreferences.volcResourceID
             apiKeyDraft = key
-            hasStoredAPIKey = AliyunCredentialStore.hasAPIKey
+            hasStoredAPIKey = VolcCredentialStore.hasAPIKey
             guard hasStoredAPIKey else {
-                throw AliyunSpeechServiceError.configuration("请填写并保存阿里云百炼 API Key。")
+                throw VolcSpeechServiceError.configuration("请填写并保存豆包语音 API Key。")
             }
             showsError = false
-            statusMessage = "阿里云配置已保存"
+            statusMessage = "豆包语音配置已保存"
         } catch {
             statusMessage = error.localizedDescription
             showsError = true
@@ -238,18 +281,15 @@ struct SpeechServiceSettingsView: View {
         }
 
         isChecking = true
-        statusMessage = "正在验证阿里云连接…"
+        statusMessage = "正在验证豆包实时连接…"
         Task { @MainActor in
             defer { isChecking = false }
             do {
-                try await AliyunSpeechTranscriber.validateConfiguration()
+                try await VolcRealtimeSpeechTranscriber.validateConfiguration()
                 showsError = false
-                statusMessage = "连接成功，实时热词与历史文件转写接口可用"
+                statusMessage = "连接成功，实时识别与历史重转写可用"
             } catch {
-                statusMessage = """
-                \(error.localizedDescription)
-                如果凭证无效，请确认 API Key 创建于华北 2（北京）地域。
-                """
+                statusMessage = error.localizedDescription
                 showsError = true
             }
         }
@@ -257,7 +297,7 @@ struct SpeechServiceSettingsView: View {
 
     private func deleteAPIKey() {
         do {
-            try AliyunCredentialStore.deleteAPIKey()
+            try VolcCredentialStore.deleteAPIKey()
             apiKeyDraft = ""
             hasStoredAPIKey = false
             isAPIKeyVisible = false
@@ -271,8 +311,9 @@ struct SpeechServiceSettingsView: View {
 
     private func loadStoredAPIKey() {
         do {
-            apiKeyDraft = try AliyunCredentialStore.apiKey() ?? ""
+            apiKeyDraft = try VolcCredentialStore.apiKey() ?? ""
             hasStoredAPIKey = !apiKeyDraft.isEmpty
+            resourceID = SpeechServicePreferences.volcResourceID
         } catch {
             apiKeyDraft = ""
             hasStoredAPIKey = false

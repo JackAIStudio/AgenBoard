@@ -118,9 +118,9 @@ final class PortableDataService {
             forInfoDictionaryKey: "CFBundleVersion"
         ) as? String ?? "unknown"
 
-        let aliyunConfigured = AliyunCredentialStore.hasAPIKey
+        let volcConfigured = VolcCredentialStore.hasAPIKey
         let exportedAPIKey = includeCredentials
-            ? try AliyunCredentialStore.apiKey()
+            ? try VolcCredentialStore.apiKey()
             : nil
         let recordingItems = includeRecordings
             ? historyStore.items.filter {
@@ -138,14 +138,16 @@ final class PortableDataService {
             appVersion: appVersion,
             buildNumber: buildNumber,
             preferences: PortablePreferencesDocument.current(
-                aliyunConfigured: aliyunConfigured,
+                volcConfigured: volcConfigured,
                 credentialsIncluded: exportedAPIKey != nil
             ),
             credentials: exportedAPIKey.map {
                 PortableCredentialsDocument(
                     format: "agenboard-credentials",
-                    schemaVersion: 1,
-                    aliyunApiKey: $0
+                    schemaVersion: 2,
+                    volcApiKey: $0,
+                    volcResourceID: SpeechServicePreferences.volcResourceID,
+                    aliyunApiKey: nil
                 )
             },
             hotwords: hotwordStore.entries.map(PortableHotword.init),
@@ -228,7 +230,7 @@ final class PortableDataService {
             exportedAt: payload.manifest.exportedAt,
             appVersion: payload.manifest.appVersion,
             counts: payload.counts,
-            credentialsIncluded: payload.credentials != nil,
+            credentialsIncluded: payload.credentials?.volcApiKey != nil,
             pinyinIncluded: payload.pinyinSnapshotURL != nil,
             mergeSummary: analyzeMerge(
                 payload: payload,
@@ -263,11 +265,18 @@ final class PortableDataService {
                 imported: payload.quickPhrases
             )
 
-        let previousAPIKey = try AliyunCredentialStore.apiKey()
-        let importedAPIKey = payload.credentials?.aliyunApiKey
+        let previousAPIKey = try VolcCredentialStore.apiKey()
+        let previousResourceID = SpeechServicePreferences.volcResourceID
+        let importedAPIKey = payload.credentials?.volcApiKey
         let credentialChanged = importedAPIKey != nil && importedAPIKey != previousAPIKey
+        let importedResourceID = payload.credentials?.volcResourceID
+        let resourceIDChanged = importedResourceID != nil
+            && importedResourceID != previousResourceID
         if let importedAPIKey, credentialChanged {
-            try AliyunCredentialStore.saveAPIKey(importedAPIKey)
+            try VolcCredentialStore.saveAPIKey(importedAPIKey)
+        }
+        if let resourceID = importedResourceID {
+            SpeechServicePreferences.volcResourceID = resourceID
         }
 
         do {
@@ -285,6 +294,9 @@ final class PortableDataService {
         } catch {
             if credentialChanged {
                 restoreCredential(previousAPIKey)
+            }
+            if resourceIDChanged {
+                SpeechServicePreferences.volcResourceID = previousResourceID
             }
             throw error
         }
@@ -322,11 +334,18 @@ final class PortableDataService {
             forKey: RecognitionPreferences.useHotwordsKey
         )
         SpeechServicePreferences.provider = preferences.recognition.provider
+        SpeechServicePreferences.volcRealtimeTranscriptionMode =
+            preferences.recognition.volcRealtimeTranscriptionMode
+                ?? preferences.recognition.aliyunRealtimeTranscriptionMode
+                ?? .naturalDictation
         SharedCommandStore.setKeyboardQuickPhraseModuleVisible(
             preferences.keyboard.showsQuickPhraseModule
         )
         SharedCommandStore.setKeyboardHapticsEnabled(
             preferences.keyboard.hapticsEnabled
+        )
+        SharedCommandStore.setKeyboardEnglishAutoCapitalizationEnabled(
+            preferences.keyboard.englishAutoCapitalizationEnabled ?? false
         )
         if let module = preferences.keyboard.selectedModule,
            let rawValue = PortableKeyboardModule(rawValue: module)?.internalRawValue {
@@ -337,9 +356,9 @@ final class PortableDataService {
 
     private func restoreCredential(_ value: String?) {
         if let value {
-            try? AliyunCredentialStore.saveAPIKey(value)
+            try? VolcCredentialStore.saveAPIKey(value)
         } else {
-            try? AliyunCredentialStore.deleteAPIKey()
+            try? VolcCredentialStore.deleteAPIKey()
         }
     }
 
@@ -576,7 +595,7 @@ private struct PortablePreferencesDocument: Codable, Sendable {
 
     @MainActor
     static func current(
-        aliyunConfigured: Bool,
+        volcConfigured: Bool,
         credentialsIncluded: Bool
     ) -> PortablePreferencesDocument {
         PortablePreferencesDocument(
@@ -584,18 +603,25 @@ private struct PortablePreferencesDocument: Codable, Sendable {
             schemaVersion: 1,
             recognition: PortableRecognitionPreferences(
                 provider: SpeechServicePreferences.provider,
-                usesHotwords: RecognitionPreferences.usesHotwords
+                usesHotwords: RecognitionPreferences.usesHotwords,
+                volcRealtimeTranscriptionMode:
+                    SpeechServicePreferences.volcRealtimeTranscriptionMode,
+                aliyunRealtimeTranscriptionMode: nil
             ),
             keyboard: PortableKeyboardPreferences(
                 showsQuickPhraseModule: SharedCommandStore.keyboardQuickPhraseModuleVisible(),
                 hapticsEnabled: SharedCommandStore.keyboardHapticsEnabled(),
+                englishAutoCapitalizationEnabled:
+                    SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled(),
                 selectedModule: PortableKeyboardModule(
                     internalRawValue: SharedCommandStore.keyboardSelectedContentModuleRawValue()
                 )?.rawValue
             ),
             credentials: PortableCredentialDisclosure(
-                aliyunApiKeyIncluded: credentialsIncluded,
-                aliyunConfiguredOnExportingDevice: aliyunConfigured
+                volcApiKeyIncluded: credentialsIncluded,
+                volcConfiguredOnExportingDevice: volcConfigured,
+                aliyunApiKeyIncluded: nil,
+                aliyunConfiguredOnExportingDevice: nil
             )
         )
     }
@@ -604,23 +630,30 @@ private struct PortablePreferencesDocument: Codable, Sendable {
 private struct PortableCredentialsDocument: Codable, Sendable {
     let format: String
     let schemaVersion: Int
-    let aliyunApiKey: String
+    let volcApiKey: String?
+    let volcResourceID: String?
+    let aliyunApiKey: String?
 }
 
 private struct PortableRecognitionPreferences: Codable, Sendable {
     let provider: SpeechRecognitionProvider
     let usesHotwords: Bool
+    let volcRealtimeTranscriptionMode: VolcRealtimeTranscriptionMode?
+    let aliyunRealtimeTranscriptionMode: VolcRealtimeTranscriptionMode?
 }
 
 private struct PortableKeyboardPreferences: Codable, Sendable {
     let showsQuickPhraseModule: Bool
     let hapticsEnabled: Bool
+    let englishAutoCapitalizationEnabled: Bool?
     let selectedModule: String?
 }
 
 private struct PortableCredentialDisclosure: Codable, Sendable {
-    let aliyunApiKeyIncluded: Bool
-    let aliyunConfiguredOnExportingDevice: Bool
+    let volcApiKeyIncluded: Bool?
+    let volcConfiguredOnExportingDevice: Bool?
+    let aliyunApiKeyIncluded: Bool?
+    let aliyunConfiguredOnExportingDevice: Bool?
 }
 
 private enum PortableKeyboardModule: String, Codable, Sendable {
@@ -767,7 +800,7 @@ private struct PortableRecognitionResult: Codable, Sendable {
     let matchedTerms: [String]?
     let provider: SpeechRecognitionProvider?
     let words: [SpeechRecognitionWord]?
-    let realtimeMetrics: AliyunRealtimeRecognitionMetrics?
+    let realtimeMetrics: RealtimeRecognitionMetrics?
 
     static func make(
         transcript: String?,
@@ -776,7 +809,7 @@ private struct PortableRecognitionResult: Codable, Sendable {
         matchedTerms: [String]?,
         provider: SpeechRecognitionProvider?,
         words: [SpeechRecognitionWord]?,
-        realtimeMetrics: AliyunRealtimeRecognitionMetrics?
+        realtimeMetrics: RealtimeRecognitionMetrics?
     ) -> PortableRecognitionResult? {
         guard transcript != nil
                 || elapsedSeconds != nil
@@ -1051,11 +1084,17 @@ private enum PortablePackageReader {
                 at: packageRoot.appendingPathComponent("credentials.json")
             )
             guard document.format == "agenboard-credentials",
-                  document.schemaVersion == 1,
-                  !document.aliyunApiKey.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                  ).isEmpty else {
+                  document.schemaVersion == 1 || document.schemaVersion == 2 else {
                 throw PortableDataError.invalidFormat("credentials.json 格式或内容不正确。")
+            }
+            let expectedKey = document.schemaVersion == 1
+                ? document.aliyunApiKey
+                : document.volcApiKey
+            guard let expectedKey,
+                  !expectedKey.trimmingCharacters(
+                      in: .whitespacesAndNewlines
+                  ).isEmpty else {
+                throw PortableDataError.invalidFormat("credentials.json 没有有效的 API Key。")
             }
             credentials = document
         } else {
@@ -1080,8 +1119,10 @@ private enum PortablePackageReader {
             manifest: manifest,
             packageRoot: packageRoot
         )
-        if credentials != nil {
-            warnings.append("此数据包包含明文阿里云 API Key，导入后会保存到本机钥匙串。")
+        if credentials?.volcApiKey != nil {
+            warnings.append("此数据包包含明文豆包语音 API Key，导入后会保存到本机钥匙串。")
+        } else if credentials?.aliyunApiKey != nil {
+            warnings.append("此数据包只包含已停用的阿里云 API Key；为避免误用，导入时不会保存该凭证。")
         }
         let pinyinCandidateURL = packageRoot
             .appendingPathComponent("pinyin", isDirectory: true)
@@ -1496,7 +1537,7 @@ private enum PortableReadme {
         pinyinIncluded: Bool
     ) -> String {
         let credentialDescription = credentialsIncluded
-            ? "- `credentials.json`：用户明确选择导出的明文阿里云 API Key。"
+            ? "- `credentials.json`：用户明确选择导出的明文豆包语音 API Key 与资源 ID。"
             : "- 本数据包未包含 API Key；导入后沿用目标设备钥匙串中的凭证。"
         let recordingDescription = counts.recordings > 0
             ? "- `recordings/`：用户明确选择导出的标准 M4A 原始录音，通过历史记录中的 `audio.file` 关联。"
@@ -1540,7 +1581,7 @@ private enum PortableReadme {
 
         ## 隐私
 
-        转写文本始终包含；原始录音只有用户在导出页明确开启时才会加入。只有用户明确开启时，阿里云 API Key 才会以明文写入 `credentials.json`。钥匙串本身、缓存、临时文件、画中画状态和键盘运行状态不会导出。
+        转写文本始终包含；原始录音只有用户在导出页明确开启时才会加入。只有用户明确开启时，豆包语音 API Key 才会以明文写入 `credentials.json`。钥匙串本身、缓存、临时文件、画中画状态和键盘运行状态不会导出。
         """
     }
 }

@@ -170,7 +170,7 @@ struct RecognitionHistoryDetailView: View {
     let itemID: UUID
 
     @StateObject private var playback = RecognitionHistoryPlaybackController()
-    @State private var selectedProvider = SpeechRecognitionProvider.aliyun
+    @State private var selectedProvider = SpeechRecognitionProvider.volcRealtime
     @State private var selectedMode = RecognitionHotwordMode.withHotwords
     @State private var isRunning = false
     @State private var runningStatus = ""
@@ -309,39 +309,21 @@ struct RecognitionHistoryDetailView: View {
             }
 
             Picker("转写服务", selection: $selectedProvider) {
-                Text(SpeechRecognitionProvider.aliyun.title)
-                    .tag(SpeechRecognitionProvider.aliyun)
                 Text(SpeechRecognitionProvider.apple.title)
                     .tag(SpeechRecognitionProvider.apple)
-                Text(SpeechRecognitionProvider.aliyunRealtime.title)
-                    .tag(SpeechRecognitionProvider.aliyunRealtime)
+                Text(SpeechRecognitionProvider.volcRealtime.title)
+                    .tag(SpeechRecognitionProvider.volcRealtime)
             }
             .pickerStyle(.menu)
             .disabled(isRunning)
 
-            if selectedProvider == .aliyun {
+            if selectedProvider == .volcRealtime {
                 Label(
-                    "推荐用于历史录音：整段异步处理，也可恢复实时识别失败的录音",
-                    systemImage: "clock.arrow.circlepath"
+                    "历史音频会按原始时长推入同一条双向流式链路，并以二遍结果作为终稿",
+                    systemImage: "waveform.path.ecg"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            } else if selectedProvider == .aliyunRealtime {
-                Label(
-                    "历史音频会按原始时长重新推流；长录音通常优先使用文件版",
-                    systemImage: "hourglass"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-            }
-
-            if isRealtimeRecoveryCandidate(item), selectedProvider == .aliyun {
-                Label(
-                    "原实时识别未完成，可以使用保存的原音频恢复",
-                    systemImage: "exclamationmark.arrow.triangle.2.circlepath"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.orange)
             }
 
             Picker("识别模式", selection: $selectedMode) {
@@ -356,9 +338,7 @@ struct RecognitionHistoryDetailView: View {
                 runTranscriptions([selectedMode], item: item)
             } label: {
                 Label(
-                    isRealtimeRecoveryCandidate(item) && selectedProvider == .aliyun
-                        ? "使用文件版恢复识别"
-                        : "重新转写所选模式",
+                    "重新转写所选模式",
                     systemImage: "waveform.badge.magnifyingglass"
                 )
                     .frame(maxWidth: .infinity)
@@ -390,12 +370,6 @@ struct RecognitionHistoryDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func isRealtimeRecoveryCandidate(_ item: RecognitionHistoryItem) -> Bool {
-        item.originalProvider == .aliyunRealtime
-            && item.resolvedOriginalResult == nil
-            && item.lastErrorProvider == .aliyunRealtime
     }
 
     private func comparisonSection(_ summary: RecognitionComparisonSummary) -> some View {
@@ -443,8 +417,10 @@ struct RecognitionHistoryDetailView: View {
         switch selectedProvider {
         case .apple:
             return supportsSpeechAnalyzer
+        case .volcRealtime:
+            return VolcCredentialStore.hasAPIKey
         case .aliyun, .aliyunRealtime:
-            return AliyunCredentialStore.hasAPIKey
+            return false
         }
     }
 
@@ -452,8 +428,10 @@ struct RecognitionHistoryDetailView: View {
         switch selectedProvider {
         case .apple:
             return "Apple 录音对照需要 iOS 26 的 DictationTranscriber。"
+        case .volcRealtime:
+            return "请先在“识别服务”中保存豆包语音 API Key。"
         case .aliyun, .aliyunRealtime:
-            return "请先在“识别服务”中保存阿里云百炼 API Key。"
+            return "旧版阿里云识别已停用，请改用豆包实时识别。"
         }
     }
 
@@ -534,39 +512,11 @@ struct RecognitionHistoryDetailView: View {
                     showsAlert = true
                     return
                 }
-            } else if provider == .aliyun {
+            } else if provider == .volcRealtime {
                 for (index, mode) in modes.enumerated() {
                     let contextTerms = mode == .withHotwords ? activeHotwords : []
                     do {
-                        let output = try await AliyunSpeechTranscriber.transcribe(
-                            audioURL: store.audioURL(for: item),
-                            hotwords: contextTerms
-                        ) { progress in
-                            runningStatus =
-                                "\(progress) · \(mode.title) · \(index + 1)/\(modes.count)"
-                        }
-                        try save(
-                            output: output,
-                            provider: provider,
-                            mode: mode,
-                            item: item,
-                            allHotwords: hotwords
-                        )
-                    } catch {
-                        record(
-                            error: error,
-                            provider: provider,
-                            mode: mode,
-                            item: item,
-                            failures: &failures
-                        )
-                    }
-                }
-            } else {
-                for (index, mode) in modes.enumerated() {
-                    let contextTerms = mode == .withHotwords ? activeHotwords : []
-                    do {
-                        let realtimeOutput = try await AliyunRealtimeSpeechTranscriber.transcribe(
+                        let realtimeOutput = try await VolcRealtimeSpeechTranscriber.transcribe(
                             audioURL: store.audioURL(for: item),
                             hotwords: contextTerms
                         ) { progress in
@@ -591,6 +541,9 @@ struct RecognitionHistoryDetailView: View {
                         )
                     }
                 }
+            } else {
+                alertMessage = "旧版阿里云识别已停用，请改用豆包实时识别。"
+                showsAlert = true
             }
 
             if !failures.isEmpty {
@@ -606,8 +559,8 @@ struct RecognitionHistoryDetailView: View {
         mode: RecognitionHotwordMode,
         item: RecognitionHistoryItem,
         allHotwords: [String],
-        fileMetrics: AliyunFileRecognitionMetrics? = nil,
-        realtimeMetrics: AliyunRealtimeRecognitionMetrics? = nil
+        fileMetrics: LegacyFileRecognitionMetrics? = nil,
+        realtimeMetrics: RealtimeRecognitionMetrics? = nil
     ) throws {
         let transcript = SpeechTranscriptNormalizer.normalize(output.transcript)
         let matchedTerms = HotwordTranscriptMatcher.matches(
@@ -688,7 +641,8 @@ private struct RecognitionBenchmarkResultsSection: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Text(
-                            result.provider == .aliyunRealtime
+                            result.provider == .volcRealtime
+                                || result.provider == .aliyunRealtime
                                 ? String(format: "停止后 %.2fs", result.elapsed)
                                 : String(format: "总耗时 %.2fs", result.elapsed)
                         )
@@ -786,7 +740,7 @@ private struct RecognitionResultSection: View {
         item.words(for: mode)
     }
 
-    private var realtimeMetrics: AliyunRealtimeRecognitionMetrics? {
+    private var realtimeMetrics: RealtimeRecognitionMetrics? {
         item.realtimeMetrics(for: mode)
     }
 
