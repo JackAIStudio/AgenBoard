@@ -1944,18 +1944,19 @@ final class KeyboardViewController: UIInputViewController,
             return false
         }
 
-        // Rime's preedit text may contain syllable separators (for example,
-        // "agen" is displayed as "a gen"). Replace that presentation text
-        // with the exact keys the user typed before ending the composition so
-        // Return and language switching commit contiguous Latin text.
+        let rawComposition = pinyinComposition
+
+        // Explicitly remove the marked range before inserting the original
+        // letters as confirmed text. Merely replacing the preedit with the same
+        // value (for example, "test" -> "test") can leave the underline active
+        // in some hosts, while Rime may also display separators such as
+        // "a gen". Clearing first handles both cases reliably.
         textDocumentProxy.setMarkedText(
-            pinyinComposition,
-            selectedRange: NSRange(
-                location: pinyinComposition.utf16.count,
-                length: 0
-            )
+            "",
+            selectedRange: NSRange(location: 0, length: 0)
         )
         textDocumentProxy.unmarkText()
+        textDocumentProxy.insertText(rawComposition)
         pinyinComposition = ""
         pinyinCandidates = []
         PinyinInputEngine.resetComposition()
