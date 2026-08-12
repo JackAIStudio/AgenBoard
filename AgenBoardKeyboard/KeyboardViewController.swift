@@ -1944,6 +1944,17 @@ final class KeyboardViewController: UIInputViewController,
             return false
         }
 
+        // Rime's preedit text may contain syllable separators (for example,
+        // "agen" is displayed as "a gen"). Replace that presentation text
+        // with the exact keys the user typed before ending the composition so
+        // Return and language switching commit contiguous Latin text.
+        textDocumentProxy.setMarkedText(
+            pinyinComposition,
+            selectedRange: NSRange(
+                location: pinyinComposition.utf16.count,
+                length: 0
+            )
+        )
         textDocumentProxy.unmarkText()
         pinyinComposition = ""
         pinyinCandidates = []
