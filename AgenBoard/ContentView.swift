@@ -19,6 +19,9 @@ struct ContentView: View {
     @StateObject private var historyStore: RecognitionHistoryStore
     @StateObject private var pip = PictureInPictureCoordinator()
     @StateObject private var hotwordStore = HotwordLibraryStore(loadImmediately: false)
+    @StateObject private var replacementStore = ReplacementLibraryStore(
+        loadImmediately: false
+    )
     @StateObject private var quickPhraseStore = QuickPhraseLibraryStore(loadImmediately: false)
     @StateObject private var recordingRequestObserver = SharedRecordingRequestObserver()
     @AppStorage(
@@ -431,6 +434,38 @@ struct ContentView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     NavigationLink {
+                        ReplacementLibraryView(store: replacementStore)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.left.arrow.right.square")
+                                .font(.title3)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("替换词库")
+                                    .font(.headline)
+
+                                Text(
+                                    "已启用 \(replacementStore.enabledCount) · "
+                                        + "总规则 \(replacementStore.rules.count)"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    NavigationLink {
                         QuickPhraseLibraryView(store: quickPhraseStore)
                     } label: {
                         HStack(spacing: 12) {
@@ -468,6 +503,7 @@ struct ContentView: View {
                         DataTransferView(
                             historyStore: historyStore,
                             hotwordStore: hotwordStore,
+                            replacementStore: replacementStore,
                             quickPhraseStore: quickPhraseStore,
                             onImported: refreshImportedPortableData
                         )
@@ -968,12 +1004,14 @@ struct ContentView: View {
 
         historyStore.loadIfNeeded()
         hotwordStore.refresh()
+        replacementStore.refresh()
         quickPhraseStore.refresh()
         RecordingLaunchMetrics.mark("main_deferred_home_data_loaded")
     }
 
     private func refreshImportedPortableData() {
         hotwordStore.refresh()
+        replacementStore.refresh()
         quickPhraseStore.refresh()
         usesHotwords = RecognitionPreferences.usesHotwords
         providerRawValue = SpeechServicePreferences.provider.rawValue

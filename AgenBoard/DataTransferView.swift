@@ -6,6 +6,7 @@ struct DataTransferView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var historyStore: RecognitionHistoryStore
     @ObservedObject var hotwordStore: HotwordLibraryStore
+    @ObservedObject var replacementStore: ReplacementLibraryStore
     @ObservedObject var quickPhraseStore: QuickPhraseLibraryStore
     let onImported: () -> Void
 
@@ -110,6 +111,7 @@ struct DataTransferView: View {
                 }
 
                 LabeledContent("热词", value: "\(hotwordStore.entries.count) 个")
+                LabeledContent("替换词", value: "\(replacementStore.rules.count) 条")
                 LabeledContent("快捷短语", value: "\(quickPhraseStore.phrases.count) 条")
                 LabeledContent("识别历史", value: "\(historyStore.items.count) 条")
                 LabeledContent(
@@ -264,6 +266,7 @@ struct DataTransferView: View {
                 let url = try await PortableDataService.shared.createCompleteExport(
                     historyStore: historyStore,
                     hotwordStore: hotwordStore,
+                    replacementStore: replacementStore,
                     quickPhraseStore: quickPhraseStore,
                     includeRecordings: includeRecordings,
                     includeCredentials: includeCredentials
@@ -288,6 +291,7 @@ struct DataTransferView: View {
                         from: url,
                         historyStore: historyStore,
                         hotwordStore: hotwordStore,
+                        replacementStore: replacementStore,
                         quickPhraseStore: quickPhraseStore
                     )
                 } catch {
@@ -316,6 +320,7 @@ struct DataTransferView: View {
                     mode: mode,
                     historyStore: historyStore,
                     hotwordStore: hotwordStore,
+                    replacementStore: replacementStore,
                     quickPhraseStore: quickPhraseStore
                 )
                 importPreview = nil

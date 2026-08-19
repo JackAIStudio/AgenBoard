@@ -20,6 +20,7 @@ enum PortableImportMode: String, CaseIterable, Identifiable, Sendable {
 
 struct PortableDataCounts: Codable, Equatable, Sendable {
     let hotwords: Int
+    let replacements: Int
     let quickPhrases: Int
     let recognitionHistory: Int
     let recordings: Int
@@ -27,12 +28,14 @@ struct PortableDataCounts: Codable, Equatable, Sendable {
 
     init(
         hotwords: Int,
+        replacements: Int = 0,
         quickPhrases: Int,
         recognitionHistory: Int,
         recordings: Int,
         pinyinEntries: Int = 0
     ) {
         self.hotwords = hotwords
+        self.replacements = replacements
         self.quickPhrases = quickPhrases
         self.recognitionHistory = recognitionHistory
         self.recordings = recordings
@@ -41,6 +44,7 @@ struct PortableDataCounts: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case hotwords
+        case replacements
         case quickPhrases
         case recognitionHistory
         case recordings
@@ -50,6 +54,10 @@ struct PortableDataCounts: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotwords = try container.decode(Int.self, forKey: .hotwords)
+        replacements = try container.decodeIfPresent(
+            Int.self,
+            forKey: .replacements
+        ) ?? 0
         quickPhrases = try container.decode(Int.self, forKey: .quickPhrases)
         recognitionHistory = try container.decode(Int.self, forKey: .recognitionHistory)
         recordings = try container.decode(Int.self, forKey: .recordings)
@@ -64,6 +72,9 @@ struct PortableMergeSummary: Equatable, Sendable {
     let newHotwords: Int
     let updatedHotwords: Int
     let duplicateHotwords: Int
+    let newReplacements: Int
+    let updatedReplacements: Int
+    let duplicateReplacements: Int
     let newQuickPhrases: Int
     let updatedQuickPhrases: Int
     let duplicateQuickPhrases: Int
@@ -77,6 +88,7 @@ struct PortableImportPreview: Identifiable, Sendable {
     let exportedAt: Date
     let appVersion: String
     let counts: PortableDataCounts
+    let replacementsIncluded: Bool
     let credentialsIncluded: Bool
     let pinyinIncluded: Bool
     let mergeSummary: PortableMergeSummary
@@ -88,6 +100,7 @@ struct PortableImportPreview: Identifiable, Sendable {
 struct PortableImportResult: Equatable, Sendable {
     let mode: PortableImportMode
     let hotwordCount: Int
+    let replacementCount: Int
     let quickPhraseCount: Int
     let historyCount: Int
     let pinyinEntryCount: Int?
@@ -102,12 +115,14 @@ final class PortableDataService {
     func createCompleteExport(
         historyStore: RecognitionHistoryStore,
         hotwordStore: HotwordLibraryStore,
+        replacementStore: ReplacementLibraryStore,
         quickPhraseStore: QuickPhraseLibraryStore,
         includeRecordings: Bool,
         includeCredentials: Bool
     ) async throws -> URL {
         historyStore.loadIfNeeded()
         hotwordStore.refresh()
+        replacementStore.refresh()
         quickPhraseStore.refresh()
 
         let bundle = Bundle.main
@@ -151,6 +166,7 @@ final class PortableDataService {
                 )
             },
             hotwords: hotwordStore.entries.map(PortableHotword.init),
+            replacements: replacementStore.rules.map(PortableReplacement.init),
             quickPhrases: quickPhraseStore.phrases.map(PortableQuickPhrase.init),
             history: historyStore.items.map {
                 PortableRecognitionRecord(
@@ -181,6 +197,7 @@ final class PortableDataService {
         from sourceURL: URL,
         historyStore: RecognitionHistoryStore,
         hotwordStore: HotwordLibraryStore,
+        replacementStore: ReplacementLibraryStore,
         quickPhraseStore: QuickPhraseLibraryStore
     ) async throws -> PortableImportPreview {
         let fileManager = FileManager.default
@@ -223,6 +240,7 @@ final class PortableDataService {
 
         historyStore.loadIfNeeded()
         hotwordStore.refresh()
+        replacementStore.refresh()
         quickPhraseStore.refresh()
 
         return PortableImportPreview(
@@ -230,11 +248,13 @@ final class PortableDataService {
             exportedAt: payload.manifest.exportedAt,
             appVersion: payload.manifest.appVersion,
             counts: payload.counts,
+            replacementsIncluded: payload.replacementsIncluded,
             credentialsIncluded: payload.credentials?.volcApiKey != nil,
             pinyinIncluded: payload.pinyinSnapshotURL != nil,
             mergeSummary: analyzeMerge(
                 payload: payload,
                 currentHotwords: hotwordStore.entries,
+                currentReplacements: replacementStore.rules,
                 currentQuickPhrases: quickPhraseStore.phrases,
                 currentHistory: historyStore.items
             ),
@@ -248,16 +268,26 @@ final class PortableDataService {
         mode: PortableImportMode,
         historyStore: RecognitionHistoryStore,
         hotwordStore: HotwordLibraryStore,
+        replacementStore: ReplacementLibraryStore,
         quickPhraseStore: QuickPhraseLibraryStore
     ) throws -> PortableImportResult {
         let payload = preview.payload
         historyStore.loadIfNeeded()
         hotwordStore.refresh()
+        replacementStore.refresh()
         quickPhraseStore.refresh()
 
         let finalHotwords = mode == .replace
             ? payload.hotwords
             : mergeHotwords(current: hotwordStore.entries, imported: payload.hotwords)
+        let finalReplacements = mode == .replace
+            ? (payload.replacementsIncluded
+                ? payload.replacements
+                : replacementStore.rules)
+            : mergeReplacements(
+                current: replacementStore.rules,
+                imported: payload.replacements
+            )
         let finalQuickPhrases = mode == .replace
             ? payload.quickPhrases
             : mergeQuickPhrases(
@@ -302,16 +332,19 @@ final class PortableDataService {
         }
 
         HotwordLibraryStorage.save(finalHotwords)
+        ReplacementLibraryStorage.save(finalReplacements)
         SharedCommandStore.saveQuickPhrases(finalQuickPhrases)
         apply(preferences: payload.preferences)
 
         hotwordStore.refresh()
+        replacementStore.refresh()
         quickPhraseStore.refresh()
         try? FileManager.default.removeItem(at: payload.workDirectory)
 
         return PortableImportResult(
             mode: mode,
             hotwordCount: hotwordStore.entries.count,
+            replacementCount: replacementStore.rules.count,
             quickPhraseCount: quickPhraseStore.phrases.count,
             historyCount: historyStore.items.count,
             pinyinEntryCount: payload.pinyinSnapshotURL == nil
@@ -368,6 +401,7 @@ final class PortableDataService {
     private func analyzeMerge(
         payload: PortableImportPayload,
         currentHotwords: [HotwordEntry],
+        currentReplacements: [ReplacementRule],
         currentQuickPhrases: [SharedQuickPhrase],
         currentHistory: [RecognitionHistoryItem]
     ) -> PortableMergeSummary {
@@ -379,6 +413,22 @@ final class PortableDataService {
         let duplicateHotwords = payload.hotwords.filter {
             !hotwordIDs.contains($0.id)
                 && hotwordKeys.contains(HotwordLibraryStorage.comparisonKey($0.term))
+        }.count
+
+        let replacementIDs = Set(currentReplacements.map(\.id))
+        let replacementKeys = Set(
+            currentReplacements.map {
+                ReplacementLibraryStorage.comparisonKey($0.source)
+            }
+        )
+        let updatedReplacements = payload.replacements.filter {
+            replacementIDs.contains($0.id)
+        }.count
+        let duplicateReplacements = payload.replacements.filter {
+            !replacementIDs.contains($0.id)
+                && replacementKeys.contains(
+                    ReplacementLibraryStorage.comparisonKey($0.source)
+                )
         }.count
 
         let quickPhraseIDs = Set(currentQuickPhrases.map(\.id))
@@ -400,6 +450,12 @@ final class PortableDataService {
             newHotwords: payload.hotwords.count - updatedHotwords - duplicateHotwords,
             updatedHotwords: updatedHotwords,
             duplicateHotwords: duplicateHotwords,
+            newReplacements:
+                payload.replacements.count
+                    - updatedReplacements
+                    - duplicateReplacements,
+            updatedReplacements: updatedReplacements,
+            duplicateReplacements: duplicateReplacements,
             newQuickPhrases:
                 payload.quickPhrases.count - updatedQuickPhrases - duplicateQuickPhrases,
             updatedQuickPhrases: updatedQuickPhrases,
@@ -459,6 +515,36 @@ final class PortableDataService {
         return result
     }
 
+    private func mergeReplacements(
+        current: [ReplacementRule],
+        imported: [ReplacementRule]
+    ) -> [ReplacementRule] {
+        var result = current
+
+        for rule in imported {
+            let incomingKey = ReplacementLibraryStorage.comparisonKey(
+                rule.source
+            )
+            if let index = result.firstIndex(where: { $0.id == rule.id }) {
+                let conflictsWithOtherRule = result.enumerated().contains {
+                    $0.offset != index
+                        && ReplacementLibraryStorage.comparisonKey(
+                            $0.element.source
+                        ) == incomingKey
+                }
+                if !conflictsWithOtherRule {
+                    result[index] = rule
+                }
+            } else if !result.contains(where: {
+                ReplacementLibraryStorage.comparisonKey($0.source)
+                    == incomingKey
+            }) {
+                result.append(rule)
+            }
+        }
+        return ReplacementLibraryStorage.sanitizedRules(result)
+    }
+
     private func quickPhraseKey(_ value: String) -> String {
         value.precomposedStringWithCanonicalMapping.folding(
             options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
@@ -474,6 +560,7 @@ private struct PortableExportSnapshot: Sendable {
     let preferences: PortablePreferencesDocument
     let credentials: PortableCredentialsDocument?
     let hotwords: [PortableHotword]
+    let replacements: [PortableReplacement]
     let quickPhrases: [PortableQuickPhrase]
     let history: [PortableRecognitionRecord]
     let recordings: [PortableRecordingSource]
@@ -498,6 +585,8 @@ private struct PortableImportPayload: Sendable {
     let preferences: PortablePreferencesDocument
     let credentials: PortableCredentialsDocument?
     let hotwords: [HotwordEntry]
+    let replacements: [ReplacementRule]
+    let replacementsIncluded: Bool
     let quickPhrases: [SharedQuickPhrase]
     let history: [RecognitionHistoryItem]
     let recordingsDirectory: URL
@@ -532,26 +621,52 @@ private struct PortableHotword: Codable, Sendable {
     let id: UUID
     let term: String
     let enabled: Bool
-    let pinned: Bool
     let createdAt: Date
-    let lastUsedAt: Date?
 
     init(_ entry: HotwordEntry) {
         id = entry.id
         term = entry.term
         enabled = entry.isEnabled
-        pinned = entry.isPinned
         createdAt = entry.createdAt
-        lastUsedAt = entry.lastUsedAt
     }
 
     var entry: HotwordEntry {
         HotwordEntry(
             id: id,
             term: term,
-            isPinned: pinned,
             isEnabled: enabled,
-            lastUsedAt: lastUsedAt,
+            createdAt: createdAt
+        )
+    }
+}
+
+private struct PortableReplacementsDocument: Codable, Sendable {
+    let format: String
+    let schemaVersion: Int
+    let replacements: [PortableReplacement]
+}
+
+private struct PortableReplacement: Codable, Sendable {
+    let id: UUID
+    let source: String
+    let replacement: String
+    let enabled: Bool
+    let createdAt: Date
+
+    init(_ rule: ReplacementRule) {
+        id = rule.id
+        source = rule.source
+        replacement = rule.replacement
+        enabled = rule.isEnabled
+        createdAt = rule.createdAt
+    }
+
+    var rule: ReplacementRule {
+        ReplacementRule(
+            id: id,
+            source: source,
+            replacement: replacement,
+            isEnabled: enabled,
             createdAt: createdAt
         )
     }
@@ -609,6 +724,7 @@ private struct PortablePreferencesDocument: Codable, Sendable {
                 usesHotwords: RecognitionPreferences.usesHotwords,
                 volcRealtimeTranscriptionMode:
                     SpeechServicePreferences.volcRealtimeTranscriptionMode,
+                volcSemanticSmoothingEnabled: nil,
                 aliyunRealtimeTranscriptionMode: nil
             ),
             keyboard: PortableKeyboardPreferences(
@@ -644,6 +760,7 @@ private struct PortableRecognitionPreferences: Codable, Sendable {
     let provider: SpeechRecognitionProvider
     let usesHotwords: Bool
     let volcRealtimeTranscriptionMode: VolcRealtimeTranscriptionMode?
+    let volcSemanticSmoothingEnabled: Bool?
     let aliyunRealtimeTranscriptionMode: VolcRealtimeTranscriptionMode?
 }
 
@@ -874,6 +991,11 @@ private enum PortablePackageBuilder {
                 schemaVersion: 1,
                 hotwords: snapshot.hotwords
             )
+            let replacementDocument = PortableReplacementsDocument(
+                format: "agenboard-replacements",
+                schemaVersion: 1,
+                replacements: snapshot.replacements
+            )
             let quickPhraseDocument = PortableQuickPhrasesDocument(
                 format: "agenboard-quick-phrases",
                 schemaVersion: 1,
@@ -886,6 +1008,10 @@ private enum PortablePackageBuilder {
             )
             try PortableJSON.prettyEncoder.encode(hotwordDocument).write(
                 to: packageDirectory.appendingPathComponent("hotwords.json"),
+                options: .atomic
+            )
+            try PortableJSON.prettyEncoder.encode(replacementDocument).write(
+                to: packageDirectory.appendingPathComponent("replacements.json"),
                 options: .atomic
             )
             try PortableJSON.prettyEncoder.encode(quickPhraseDocument).write(
@@ -931,6 +1057,7 @@ private enum PortablePackageBuilder {
 
             let counts = PortableDataCounts(
                 hotwords: snapshot.hotwords.count,
+                replacements: snapshot.replacements.count,
                 quickPhrases: snapshot.quickPhrases.count,
                 recognitionHistory: snapshot.history.count,
                 recordings: copiedRecordings,
@@ -1109,6 +1236,15 @@ private enum PortablePackageReader {
         let hotwordDocument: PortableHotwordsDocument = try decodeJSON(
             at: packageRoot.appendingPathComponent("hotwords.json")
         )
+        let replacementURL = packageRoot.appendingPathComponent(
+            "replacements.json"
+        )
+        let replacementDocument: PortableReplacementsDocument?
+        if fileManager.fileExists(atPath: replacementURL.path) {
+            replacementDocument = try decodeJSON(at: replacementURL)
+        } else {
+            replacementDocument = nil
+        }
         let quickPhraseDocument: PortableQuickPhrasesDocument = try decodeJSON(
             at: packageRoot.appendingPathComponent("quick-phrases.json")
         )
@@ -1116,6 +1252,11 @@ private enum PortablePackageReader {
               preferences.schemaVersion == 1,
               hotwordDocument.format == "agenboard-hotwords",
               hotwordDocument.schemaVersion == 1,
+              replacementDocument == nil
+                || (
+                    replacementDocument?.format == "agenboard-replacements"
+                        && replacementDocument?.schemaVersion == 1
+                ),
               quickPhraseDocument.format == "agenboard-quick-phrases",
               quickPhraseDocument.schemaVersion == 1 else {
             throw PortableDataError.invalidFormat("数据子文件格式或版本不正确。")
@@ -1152,6 +1293,15 @@ private enum PortablePackageReader {
             warnings.append("此数据包未包含拼音学习记录；导入时会保留当前设备已有的拼音偏好。")
         }
         let hotwords = sanitizeHotwords(hotwordDocument.hotwords, warnings: &warnings)
+        let replacements = sanitizeReplacements(
+            replacementDocument?.replacements ?? [],
+            warnings: &warnings
+        )
+        if replacementDocument == nil {
+            warnings.append(
+                "这是旧版数据包，未包含替换词；导入时会保留当前设备的替换词库。"
+            )
+        }
         let quickPhrases = sanitizeQuickPhrases(
             quickPhraseDocument.quickPhrases,
             warnings: &warnings
@@ -1171,6 +1321,7 @@ private enum PortablePackageReader {
         )
         let actualCounts = PortableDataCounts(
             hotwords: hotwords.count,
+            replacements: replacements.count,
             quickPhrases: quickPhrases.count,
             recognitionHistory: history.count,
             recordings: history.filter(\.hasRecording).count,
@@ -1188,6 +1339,8 @@ private enum PortablePackageReader {
             preferences: preferences,
             credentials: credentials,
             hotwords: hotwords,
+            replacements: replacements,
+            replacementsIncluded: replacementDocument != nil,
             quickPhrases: quickPhrases,
             history: history,
             recordingsDirectory: recordingsDirectory,
@@ -1298,15 +1451,49 @@ private enum PortablePackageReader {
                 HotwordEntry(
                     id: candidate.id,
                     term: term,
-                    isPinned: candidate.pinned,
                     isEnabled: candidate.enabled,
-                    lastUsedAt: candidate.lastUsedAt,
                     createdAt: candidate.createdAt
                 )
             )
         }
         if skipped > 0 {
             warnings.append("已忽略 \(skipped) 个无效或重复热词。")
+        }
+        return output
+    }
+
+    private static func sanitizeReplacements(
+        _ candidates: [PortableReplacement],
+        warnings: inout [String]
+    ) -> [ReplacementRule] {
+        var ids = Set<UUID>()
+        var sources = Set<String>()
+        var output: [ReplacementRule] = []
+        var skipped = 0
+
+        for candidate in candidates {
+            guard let values = ReplacementLibraryStorage.normalizedValues(
+                source: candidate.source,
+                replacement: candidate.replacement
+            ), ids.insert(candidate.id).inserted,
+               sources.insert(
+                   ReplacementLibraryStorage.comparisonKey(values.source)
+               ).inserted else {
+                skipped += 1
+                continue
+            }
+            output.append(
+                ReplacementRule(
+                    id: candidate.id,
+                    source: values.source,
+                    replacement: values.replacement,
+                    isEnabled: candidate.enabled,
+                    createdAt: candidate.createdAt
+                )
+            )
+        }
+        if skipped > 0 {
+            warnings.append("已忽略 \(skipped) 条无效或重复替换规则。")
         }
         return output
     }
@@ -1560,6 +1747,7 @@ private enum PortableReadme {
         - AgenBoard 版本：\(appVersion)
         - 导出时间：\(PortableDate.string(exportedAt))
         - 热词：\(counts.hotwords)
+        - 替换词：\(counts.replacements)
         - 快捷短语：\(counts.quickPhrases)
         - 识别历史：\(counts.recognitionHistory)
         - 录音：\(counts.recordings)
@@ -1569,7 +1757,8 @@ private enum PortableReadme {
 
         - `manifest.json`：格式版本、数量、文件清单与 SHA-256 校验值。
         - `preferences.json`：识别和键盘偏好；不包含 API Key。
-        - `hotwords.json`：热词、启用状态、置顶状态和使用时间。
+        - `hotwords.json`：热词和启用状态。
+        - `replacements.json`：识别文本的本地替换规则和启用状态。
         - `quick-phrases.json`：快捷短语、顺序和启用状态。
         - `recognition-history.jsonl`：每行一条识别历史，适合 AI 和脚本流式处理；转写文本始终包含。
         \(pinyinDescription)
@@ -1582,8 +1771,8 @@ private enum PortableReadme {
         可以用文本编辑器、脚本或 AI 修改 JSON 或拼音快照后重新压缩为 ZIP 并导回 AgenBoard。
         修改文件后无需更新 manifest 中的校验值；导入时会提示文件已修改，但只要结构有效仍可继续。
 
-        智能合并以稳定 ID 判断同一条数据；没有相同 ID 时，热词按规范化文字去重，快捷短语按内容去重；拼音学习记录由 Rime 原生合并。
-        完全替换会以此数据包覆盖当前热词、短语、偏好、历史、包内录音和包内拼音学习记录。未附录音的历史仍可作为纯文本历史导入。
+        智能合并以稳定 ID 判断同一条数据；没有相同 ID 时，热词按规范化文字去重，替换词按来源文字去重，快捷短语按内容去重；拼音学习记录由 Rime 原生合并。
+        完全替换会以此数据包覆盖当前热词、替换词、短语、偏好、历史、包内录音和包内拼音学习记录。未附录音的历史仍可作为纯文本历史导入。
 
         ## 隐私
 

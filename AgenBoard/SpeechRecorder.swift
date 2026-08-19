@@ -1388,7 +1388,10 @@ final class SpeechRecorder: ObservableObject {
         realtimeMetrics: RealtimeRecognitionMetrics? = nil,
         completionNote: String = ""
     ) {
-        let normalizedTranscript = SpeechTranscriptNormalizer.normalize(text)
+        let normalizedTranscript = SpeechTranscriptNormalizer.normalize(
+            text,
+            replacementRules: ReplacementLibraryStorage.loadRules()
+        )
         let matchedTerms = HotwordTranscriptMatcher.matches(
             in: normalizedTranscript,
             hotwords: job.libraryHotwords
@@ -1699,28 +1702,6 @@ final class SpeechRecorder: ObservableObject {
         isPlaying = false
     }
 
-}
-
-enum SpeechTranscriptNormalizer {
-    static func normalize(_ text: String) -> String {
-        var output = text
-        let replacements: [(String, String)] = [
-            ("斜杠 new", "/new"),
-            ("斜杠new", "/new"),
-            ("slash new", "/new"),
-            ("斜杠 start", "/start"),
-            ("斜杠start", "/start"),
-            ("slash start", "/start"),
-            ("open claw", "OpenClaw"),
-            ("克劳德 code", "Claude Code")
-        ]
-
-        for (pattern, replacement) in replacements {
-            output = output.replacingOccurrences(of: pattern, with: replacement, options: [.caseInsensitive])
-        }
-
-        return output
-    }
 }
 
 enum SpeechPermissionRequester {

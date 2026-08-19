@@ -562,7 +562,10 @@ struct RecognitionHistoryDetailView: View {
         fileMetrics: LegacyFileRecognitionMetrics? = nil,
         realtimeMetrics: RealtimeRecognitionMetrics? = nil
     ) throws {
-        let transcript = SpeechTranscriptNormalizer.normalize(output.transcript)
+        let transcript = SpeechTranscriptNormalizer.normalize(
+            output.transcript,
+            replacementRules: ReplacementLibraryStorage.loadRules()
+        )
         let matchedTerms = HotwordTranscriptMatcher.matches(
             in: transcript,
             hotwords: allHotwords
