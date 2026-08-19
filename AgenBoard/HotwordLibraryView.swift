@@ -11,7 +11,10 @@ final class HotwordLibraryStore: ObservableObject {
     }
 
     var activeEntries: [HotwordEntry] {
-        HotwordSelectionPolicy.select(from: entries)
+        let accepted = Set(
+            HotwordSelectionPolicy.selectedTerms(from: entries)
+        )
+        return entries.filter { $0.isEnabled && accepted.contains($0.term) }
     }
 
     var activeCount: Int {
@@ -95,11 +98,8 @@ struct HotwordLibraryView: View {
     @FocusState private var isDraftFocused: Bool
 
     private var displayedEntries: [DisplayedHotword] {
-        let enabled = HotwordSelectionPolicy.rankedEnabledEntries(from: store.entries)
-        let disabled = store.entries.filter { !$0.isEnabled }
         let activeIDs = Set(store.activeEntries.map(\.id))
-
-        return (enabled + disabled).compactMap { entry in
+        return store.entries.compactMap { entry in
             guard searchText.isEmpty || entry.term.localizedCaseInsensitiveContains(searchText) else {
                 return nil
             }
@@ -157,16 +157,6 @@ struct HotwordLibraryView: View {
                 } else {
                     ForEach(displayedEntries) { item in
                         HStack(spacing: 12) {
-                            Button {
-                                store.togglePinned(id: item.id)
-                            } label: {
-                                Image(systemName: item.entry.isPinned ? "pin.fill" : "pin")
-                                    .frame(width: 24, height: 30)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(item.entry.isPinned ? Color.accentColor : Color.secondary)
-                            .accessibilityLabel(item.entry.isPinned ? "取消置顶" : "置顶")
-
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(item.entry.term)
                                     .foregroundStyle(item.entry.isEnabled ? Color.primary : Color.secondary)
@@ -194,12 +184,12 @@ struct HotwordLibraryView: View {
                     Text("全部热词")
                     Spacer()
                     Text(
-                        "已激活 \(store.activeCount)/\(HotwordSelectionPolicy.maximumActiveCount)、" +
+                        "已启用 \(store.entries.filter(\.isEnabled).count)、" +
                         "总词数 \(store.entries.count)"
                     )
                 }
             } footer: {
-                Text("每次识别最多激活 100 个词。已启用的置顶词优先，其余按最近命中时间补齐。")
+                Text("热词只需启用或停用。Apple 每次最多使用 100 个，豆包二遍终稿最多使用 5000 个；不会按置顶或最近命中重排。")
             }
         }
         .navigationTitle("热词词库")
@@ -308,7 +298,7 @@ private struct DisplayedHotword: Identifiable {
         if !entry.isEnabled {
             return "已停用"
         }
-        return isActive ? "已激活" : "候补"
+        return isActive ? "本次识别会使用" : "已启用，但超出当前服务上限"
     }
 }
 

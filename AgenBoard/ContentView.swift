@@ -69,6 +69,27 @@ struct ContentView: View {
         selectedProvider == .apple || volcConfigured
     }
 
+    private var selectedHotwordPlan: RecognitionHotwordPlan {
+        HotwordSelectionPolicy.plan(
+            from: hotwordStore.entries,
+            provider: selectedProvider,
+            isEnabled: usesHotwords
+        )
+    }
+
+    private var hotwordStatusText: String {
+        guard usesHotwords else {
+            return "已关闭 · 总词数 \(hotwordStore.entries.count)"
+        }
+        if selectedProvider == .volcRealtime {
+            return "已下发 \(selectedHotwordPlan.acceptedTerms.count)/"
+                + "\(HotwordSelectionPolicy.maximumVolcTermCount) · 终稿使用"
+        }
+        return "实际使用 \(selectedHotwordPlan.acceptedTerms.count)/"
+            + "\(HotwordSelectionPolicy.maximumActiveCount) · "
+            + "总词数 \(hotwordStore.entries.count)"
+    }
+
     private var canReturnToPreviousInterface: Bool {
         hasCallableReturnTarget
             && pendingReturnAttemptID == nil
@@ -300,9 +321,7 @@ struct ContentView: View {
                                 .font(.headline)
 
                             Text(
-                                usesHotwords
-                                    ? "已激活 \(hotwordStore.activeCount)/\(HotwordSelectionPolicy.maximumActiveCount) · 总词数 \(hotwordStore.entries.count)"
-                                    : "已关闭 · 总词数 \(hotwordStore.entries.count)"
+                                hotwordStatusText
                             )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -417,8 +436,7 @@ struct ContentView: View {
                                     .font(.headline)
 
                                 Text(
-                                    "已激活 \(hotwordStore.activeCount)/\(HotwordSelectionPolicy.maximumActiveCount) · " +
-                                    "总词数 \(hotwordStore.entries.count)"
+                                    hotwordStatusText
                                 )
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

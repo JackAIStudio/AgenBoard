@@ -18,32 +18,13 @@ private struct VolcHotwordSetup: Sendable {
     let ignoredTerms: [String]
 
     static func prepare(_ hotwords: [String]) -> VolcHotwordSetup {
-        var accepted: [String] = []
-        var ignored: [String] = []
-        var comparisonKeys = Set<String>()
-        var totalCharacterCount = 0
-
-        for original in hotwords {
-            let normalized = String(original.filter { $0.isLetter || $0.isNumber })
-            let characterCount = normalized.count
-            let comparisonKey = normalized.folding(
-                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                locale: Locale(identifier: "en_US_POSIX")
-            )
-            guard !normalized.isEmpty,
-                  characterCount <= 32,
-                  totalCharacterCount + characterCount <= 100,
-                  comparisonKeys.insert(comparisonKey).inserted else {
-                ignored.append(original)
-                continue
-            }
-            accepted.append(normalized)
-            totalCharacterCount += characterCount
-        }
-
+        let plan = HotwordSelectionPolicy.plan(
+            from: hotwords,
+            provider: .volcRealtime
+        )
         return VolcHotwordSetup(
-            acceptedTerms: accepted,
-            ignoredTerms: ignored
+            acceptedTerms: plan.acceptedTerms,
+            ignoredTerms: plan.exclusions.map(\.term)
         )
     }
 }

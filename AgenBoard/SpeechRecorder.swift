@@ -566,7 +566,10 @@ final class SpeechRecorder: ObservableObject {
         let libraryEntries = HotwordLibraryStorage.loadEntries()
         currentLibraryHotwords = libraryEntries.map(\.term)
         currentActiveHotwords = currentRecognitionMode == .withHotwords
-            ? HotwordSelectionPolicy.selectedTerms(from: libraryEntries)
+            ? HotwordSelectionPolicy.selectedTerms(
+                from: libraryEntries,
+                provider: SpeechServicePreferences.provider
+            )
             : []
         currentConfiguredHotwordCount = currentActiveHotwords.count
     }

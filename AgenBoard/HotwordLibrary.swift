@@ -25,63 +25,84 @@ struct HotwordEntry: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+struct RecognitionHotwordExclusion: Equatable, Sendable {
+    enum Reason: Equatable, Sendable {
+        case countLimit
+    }
+
+    let term: String
+    let reason: Reason
+}
+
+struct RecognitionHotwordPlan: Equatable, Sendable {
+    let acceptedTerms: [String]
+    let exclusions: [RecognitionHotwordExclusion]
+    let provider: SpeechRecognitionProvider
+}
+
 enum HotwordSelectionPolicy {
     static let maximumActiveCount = 100
+    static let maximumVolcTermCount = 5_000
 
-    static func select(
+    static func plan(
         from entries: [HotwordEntry],
-        limit: Int = maximumActiveCount
-    ) -> [HotwordEntry] {
-        guard limit > 0 else {
-            return []
-        }
+        provider: SpeechRecognitionProvider,
+        isEnabled: Bool = true
+    ) -> RecognitionHotwordPlan {
+        let terms = isEnabled
+            ? enabledTermsPreservingOrder(from: entries)
+            : []
+        return makePlan(terms: terms, provider: provider.primaryProvider)
+    }
 
-        return Array(
-            rankedEnabledEntries(from: entries)
-                .prefix(limit)
+    static func plan(
+        from terms: [String],
+        provider: SpeechRecognitionProvider,
+        isEnabled: Bool = true
+    ) -> RecognitionHotwordPlan {
+        makePlan(
+            terms: isEnabled ? terms : [],
+            provider: provider.primaryProvider
         )
     }
 
     static func selectedTerms(
         from entries: [HotwordEntry],
-        limit: Int = maximumActiveCount
+        provider: SpeechRecognitionProvider = .apple,
+        isEnabled: Bool = true
     ) -> [String] {
-        select(from: entries, limit: limit).map(\.term)
+        plan(from: entries, provider: provider, isEnabled: isEnabled).acceptedTerms
     }
 
     static func limitedTerms(
         _ terms: [String],
-        limit: Int = maximumActiveCount
+        provider: SpeechRecognitionProvider = .apple
     ) -> [String] {
-        guard limit > 0 else {
-            return []
-        }
-        return Array(terms.prefix(limit))
+        plan(from: terms, provider: provider).acceptedTerms
     }
 
-    static func rankedEnabledEntries(from entries: [HotwordEntry]) -> [HotwordEntry] {
-        entries.enumerated()
-            .filter { $0.element.isEnabled }
-            .sorted { left, right in
-                let lhs = left.element
-                let rhs = right.element
+    static func enabledTermsPreservingOrder(from entries: [HotwordEntry]) -> [String] {
+        entries.compactMap { entry in
+            entry.isEnabled ? entry.term : nil
+        }
+    }
 
-                if lhs.isPinned != rhs.isPinned {
-                    return lhs.isPinned
-                }
-
-                switch (lhs.lastUsedAt, rhs.lastUsedAt) {
-                case let (leftDate?, rightDate?) where leftDate != rightDate:
-                    return leftDate > rightDate
-                case (_?, nil):
-                    return true
-                case (nil, _?):
-                    return false
-                default:
-                    return left.offset < right.offset
-                }
-            }
-            .map(\.element)
+    private static func makePlan(
+        terms: [String],
+        provider: SpeechRecognitionProvider
+    ) -> RecognitionHotwordPlan {
+        let limit = provider == .volcRealtime
+            ? maximumVolcTermCount
+            : maximumActiveCount
+        let accepted = Array(terms.prefix(limit))
+        let exclusions = terms.dropFirst(accepted.count).map {
+            RecognitionHotwordExclusion(term: $0, reason: .countLimit)
+        }
+        return RecognitionHotwordPlan(
+            acceptedTerms: accepted,
+            exclusions: exclusions,
+            provider: provider
+        )
     }
 }
 

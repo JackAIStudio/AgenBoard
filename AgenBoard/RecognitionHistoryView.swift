@@ -300,9 +300,16 @@ struct RecognitionHistoryDetailView: View {
                 Spacer()
 
                 let entries = HotwordLibraryStorage.loadEntries()
+                let plan = HotwordSelectionPolicy.plan(
+                    from: entries,
+                    provider: selectedProvider
+                )
                 Text(
-                    "已激活 \(HotwordSelectionPolicy.select(from: entries).count)/" +
-                    "\(HotwordSelectionPolicy.maximumActiveCount) · 总 \(entries.count)"
+                    "将下发 \(plan.acceptedTerms.count)/" +
+                    (selectedProvider.primaryProvider == .volcRealtime
+                        ? "\(HotwordSelectionPolicy.maximumVolcTermCount)"
+                        : "\(HotwordSelectionPolicy.maximumActiveCount)") +
+                    " · 总 \(entries.count)"
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -456,7 +463,10 @@ struct RecognitionHistoryDetailView: View {
             let provider = selectedProvider
             let libraryEntries = HotwordLibraryStorage.loadEntries()
             let hotwords = libraryEntries.map(\.term)
-            let activeHotwords = HotwordSelectionPolicy.selectedTerms(from: libraryEntries)
+            let activeHotwords = HotwordSelectionPolicy.selectedTerms(
+                from: libraryEntries,
+                provider: provider
+            )
             var failures: [String] = []
 
             if provider == .apple {
