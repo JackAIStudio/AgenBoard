@@ -278,6 +278,8 @@ enum SpeechServicePreferences {
         "volcRealtimeTranscriptionModeV1"
     static let volcResourceIDKey = "volcResourceIDV1"
     static let defaultVolcResourceID = "volc.seedasr.sauc.duration"
+    static let preferredMicrophoneUIDKey = "preferredMicrophoneUIDV1"
+    static let maximumRecordingDuration: TimeInterval = 30 * 60
     // 用于从当前未提交版本平滑迁移，不再作为新设置写入。
     static let aliyunRealtimeTranscriptionModeKey =
         "aliyunRealtimeTranscriptionModeV1"
@@ -337,6 +339,22 @@ enum SpeechServicePreferences {
                 value.isEmpty ? defaultVolcResourceID : value,
                 forKey: volcResourceIDKey
             )
+        }
+    }
+
+    static var preferredMicrophoneUID: String? {
+        get {
+            let value = defaults.string(forKey: preferredMicrophoneUIDKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? nil : value
+        }
+        set {
+            let value = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if value.isEmpty {
+                defaults.removeObject(forKey: preferredMicrophoneUIDKey)
+            } else {
+                defaults.set(value, forKey: preferredMicrophoneUIDKey)
+            }
         }
     }
 

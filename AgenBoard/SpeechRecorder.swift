@@ -425,7 +425,8 @@ final class SpeechRecorder: ObservableObject {
         do {
             try Task.checkCancellation()
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .mixWithOthers])
+            try AudioSessionRouting.configureForRecording(session)
+            _ = try AudioSessionRouting.applyStoredPreferredInput(to: session)
             try await activateAudioSessionWithRetry(
                 session,
                 request: request
@@ -1568,6 +1569,15 @@ final class SpeechRecorder: ObservableObject {
         publishRecordingSnapshot(status: status)
     }
 
+    private func enforceMaximumRecordingDurationIfNeeded() {
+        guard isRecording,
+              recordingDuration >= SpeechServicePreferences.maximumRecordingDuration else {
+            return
+        }
+        status = "已达到 30 分钟上限，正在保存并进入识别终稿"
+        publishRecordingSnapshot(status: status)
+        stopRecordingAndTranscribeIfNeeded()
+    }
     private func startMetering() {
         meteringTask?.cancel()
         meteringTask = Task { @MainActor [weak self] in
@@ -1594,6 +1604,7 @@ final class SpeechRecorder: ObservableObject {
 
         recorder.updateMeters()
         recordingDuration = recorder.currentTime
+        enforceMaximumRecordingDurationIfNeeded()
 
         let averagePower = Double(recorder.averagePower(forChannel: 0))
         currentDecibels = averagePower
@@ -1622,6 +1633,7 @@ final class SpeechRecorder: ObservableObject {
             significantAudioDuration += frameDuration
         }
         recordingDuration = duration
+        enforceMaximumRecordingDurationIfNeeded()
         currentDecibels = decibels
         let linearLevel = max(0, min(1, (decibels + 55) / 45))
         let perceptualLevel = pow(linearLevel, 0.68)

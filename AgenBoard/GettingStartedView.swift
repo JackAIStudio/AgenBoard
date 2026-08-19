@@ -108,6 +108,26 @@ struct GettingStartedView: View {
                     volcConfigurationPrompt
                 }
 
+                GuideStepCard(
+                    number: 4,
+                    title: "确认麦克风",
+                    subtitle: "有蓝牙耳机或多个输入设备时，先确认正式录音会使用哪一个。"
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("测试只显示本地音量，不保存录音，也不会调用识别服务。没有外接设备时可以直接跳过。")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        NavigationLink {
+                            MicrophoneDiagnosticsView()
+                        } label: {
+                            Label("切换并测试麦克风", systemImage: "mic.and.signal.meter")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
                 openSourcePromise
 
                 if showsCompletionAction {

@@ -39,6 +39,7 @@
 		56A000022CC0000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */; };
 		57B000012CD0000100AB0001 /* GettingStartedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57B000022CD0000100AB0001 /* GettingStartedView.swift */; };
 		58C000012CE0000100AB0001 /* ReplacementLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C000022CE0000100AB0001 /* ReplacementLibrary.swift */; };
+		58D000012CF0000100AB0001 /* MicrophoneDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58D000022CF0000100AB0001 /* MicrophoneDiagnostics.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +102,7 @@
 		56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyKeyboardHostResolver.swift; sourceTree = "<group>"; };
 		57B000022CD0000100AB0001 /* GettingStartedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GettingStartedView.swift; sourceTree = "<group>"; };
 		58C000022CE0000100AB0001 /* ReplacementLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplacementLibrary.swift; sourceTree = "<group>"; };
+		58D000022CF0000100AB0001 /* MicrophoneDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneDiagnostics.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -161,6 +163,7 @@
 				4E4000062C40000100AB0001 /* HotwordLibrary.swift */,
 				4E4000042C40000100AB0001 /* HotwordLibraryView.swift */,
 				58C000022CE0000100AB0001 /* ReplacementLibrary.swift */,
+				58D000022CF0000100AB0001 /* MicrophoneDiagnostics.swift */,
 				515100022C71000100AB0001 /* QuickPhraseLibrary.swift */,
 				526000032C80000100AB0001 /* PortableData.swift */,
 				526000042C80000100AB0001 /* DataTransferView.swift */,
@@ -325,6 +328,7 @@
 				4E4000052C40000100AB0001 /* HotwordLibrary.swift in Sources */,
 				4E4000022C40000100AB0001 /* HotwordLibraryView.swift in Sources */,
 				58C000012CE0000100AB0001 /* ReplacementLibrary.swift in Sources */,
+				58D000012CF0000100AB0001 /* MicrophoneDiagnostics.swift in Sources */,
 				515100012C71000100AB0001 /* QuickPhraseLibrary.swift in Sources */,
 				526000012C80000100AB0001 /* PortableData.swift in Sources */,
 				526000022C80000100AB0001 /* DataTransferView.swift in Sources */,

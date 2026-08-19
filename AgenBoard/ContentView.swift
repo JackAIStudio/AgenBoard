@@ -365,6 +365,10 @@ struct ContentView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+
+                        Text("单次录音最多 30 分钟；达到上限会自动保存并进入识别终稿流程。")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                     .padding(14)
                     .background(.thinMaterial)
@@ -462,6 +466,39 @@ struct ContentView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    NavigationLink {
+                        MicrophoneDiagnosticsView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "mic.and.signal.meter")
+                                .font(.title3)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("麦克风切换与测试")
+                                    .font(.headline)
+                                Text("查看当前输入 · 切换设备 · 本地音量测试")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(
+                        recorder.isPreparingRecording
+                            || recorder.isRecording
+                            || recorder.isTranscribing
+                    )
                     .background(.thinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
 
