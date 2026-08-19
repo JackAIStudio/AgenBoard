@@ -1821,7 +1821,7 @@ private enum HostApplicationReturnAction {
     }
 }
 
-private struct AudioLevelMeter: View {
+struct AudioLevelMeter: View {
     let level: Double
     let isActive: Bool
 
