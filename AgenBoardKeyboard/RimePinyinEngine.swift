@@ -354,16 +354,20 @@ final class RimePinyinEngine: @unchecked Sendable {
         let visibleCandidates = fetchedCandidates.prefix(limit)
         var candidates: [String] = []
         candidates.reserveCapacity(visibleCandidates.count)
+        var texts: [String] = []
+        texts.reserveCapacity(visibleCandidates.count)
         for (relativeIndex, candidate) in visibleCandidates.enumerated() {
             guard !candidate.text.isEmpty else {
                 continue
             }
-            candidates.append(candidate.text)
+            texts.append(candidate.text)
             candidateIndexByText[candidate.text] = offset + relativeIndex
         }
         let nextOffset = offset + visibleCandidates.count
         return PinyinCandidatePage(
-            candidates: candidates,
+            candidates: texts.map { item in
+                PinyinDisplayCandidate(text: item, source: .engine, anchorText: nil)
+            },
             hasMore: fetchedCandidates.count > limit,
             nextOffset: nextOffset
         )

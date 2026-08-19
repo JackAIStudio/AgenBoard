@@ -112,6 +112,16 @@ enum RecordingLaunchMetrics {
     }
 }
 
+struct PinyinSymbolSuggestionPreferences: Codable, Equatable, Sendable {
+    var isEnabled: Bool
+    var learnedRanks: [String: [String: Int]]
+
+    static let empty = PinyinSymbolSuggestionPreferences(
+        isEnabled: true,
+        learnedRanks: [:]
+    )
+}
+
 struct SharedQuickPhrase: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var title: String
@@ -220,6 +230,10 @@ enum SharedCommandStore {
     private static let keyboardHapticsEnabledKey = "keyboardHapticsEnabled"
     private static let keyboardEnglishAutoCapitalizationEnabledKey =
         "keyboardEnglishAutoCapitalizationEnabled"
+    private static let pinyinSymbolSuggestionsEnabledKey =
+        "pinyinSymbolSuggestionsEnabled"
+    private static let pinyinSymbolSuggestionRanksKey =
+        "pinyinSymbolSuggestionRanksV1"
     private static let keyboardSelectedContentModuleKey =
         "keyboardSelectedContentModule"
     private static let keyboardAccessVerificationRequestIDKey =
@@ -373,6 +387,112 @@ enum SharedCommandStore {
         }
         defaults.set(isEnabled, forKey: keyboardEnglishAutoCapitalizationEnabledKey)
         defaults.synchronize()
+    }
+
+    static func pinyinSymbolSuggestionsEnabled() -> Bool {
+        pinyinSymbolSuggestionPreferences().isEnabled
+    }
+
+    static func setPinyinSymbolSuggestionsEnabled(_ isEnabled: Bool) {
+        var preferences = pinyinSymbolSuggestionPreferences()
+        preferences.isEnabled = isEnabled
+        savePinyinSymbolSuggestionPreferences(preferences)
+    }
+
+    static func pinyinSymbolSuggestionPreferences() -> PinyinSymbolSuggestionPreferences {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return .empty
+        }
+
+        let isEnabled: Bool
+        if defaults.object(forKey: pinyinSymbolSuggestionsEnabledKey) == nil {
+            isEnabled = true
+        } else {
+            isEnabled = defaults.bool(forKey: pinyinSymbolSuggestionsEnabledKey)
+        }
+
+        let learnedRanks: [String: [String: Int]]
+        if let data = defaults.data(forKey: pinyinSymbolSuggestionRanksKey),
+           let decoded = try? JSONDecoder().decode(
+            [String: [String: Int]].self,
+            from: data
+           ) {
+            learnedRanks = sanitizedLearnedRanks(decoded)
+        } else {
+            learnedRanks = [:]
+        }
+
+        return PinyinSymbolSuggestionPreferences(
+            isEnabled: isEnabled,
+            learnedRanks: learnedRanks
+        )
+    }
+
+    static func replacePinyinSymbolSuggestionPreferences(
+        _ preferences: PinyinSymbolSuggestionPreferences
+    ) {
+        savePinyinSymbolSuggestionPreferences(preferences)
+    }
+
+    static func recordPinyinSymbolSelection(symbol: String, for anchor: String) {
+        let normalizedAnchor = normalizedPinyinSymbolAnchor(anchor)
+        let normalizedSymbol = symbol.precomposedStringWithCanonicalMapping
+        guard !normalizedAnchor.isEmpty, !normalizedSymbol.isEmpty else {
+            return
+        }
+
+        var preferences = pinyinSymbolSuggestionPreferences()
+        var ranks = preferences.learnedRanks[normalizedAnchor] ?? [:]
+        ranks[normalizedSymbol, default: 0] += 1
+        preferences.learnedRanks[normalizedAnchor] = ranks
+        savePinyinSymbolSuggestionPreferences(preferences)
+    }
+
+    private static func savePinyinSymbolSuggestionPreferences(
+        _ preferences: PinyinSymbolSuggestionPreferences
+    ) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            return
+        }
+        defaults.set(
+            preferences.isEnabled,
+            forKey: pinyinSymbolSuggestionsEnabledKey
+        )
+        let ranks = sanitizedLearnedRanks(preferences.learnedRanks)
+        if let data = try? JSONEncoder().encode(ranks) {
+            defaults.set(data, forKey: pinyinSymbolSuggestionRanksKey)
+        }
+        defaults.synchronize()
+    }
+
+    static func normalizedPinyinSymbolAnchor(_ text: String) -> String {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+    }
+
+    private static func sanitizedLearnedRanks(
+        _ ranks: [String: [String: Int]]
+    ) -> [String: [String: Int]] {
+        var sanitized: [String: [String: Int]] = [:]
+        for (anchor, symbols) in ranks {
+            let normalizedAnchor = normalizedPinyinSymbolAnchor(anchor)
+            guard !normalizedAnchor.isEmpty else {
+                continue
+            }
+            var normalizedSymbols: [String: Int] = [:]
+            for (symbol, count) in symbols {
+                let normalizedSymbol = symbol.precomposedStringWithCanonicalMapping
+                guard !normalizedSymbol.isEmpty, count > 0 else {
+                    continue
+                }
+                normalizedSymbols[normalizedSymbol] = min(count, 9_999)
+            }
+            if !normalizedSymbols.isEmpty {
+                sanitized[normalizedAnchor] = normalizedSymbols
+            }
+        }
+        return sanitized
     }
 
     static func quickPhrases() -> [SharedQuickPhrase] {

@@ -145,7 +145,7 @@ final class KeyboardViewController: UIInputViewController,
     private var keyboardPage = KeyboardPage.letters
     private var keyboardLanguage = KeyboardLanguage.pinyin
     private var pinyinComposition = ""
-    private var pinyinCandidates: [String] = []
+    private var pinyinCandidates: [PinyinDisplayCandidate] = []
     private weak var pinyinCandidateStack: UIStackView?
     private weak var pinyinCandidateScrollView: UIScrollView?
     private weak var pinyinCandidateExpansionButton: UIButton?
@@ -895,7 +895,8 @@ final class KeyboardViewController: UIInputViewController,
         if showsExpandedCandidates {
             let page = PinyinInputEngine.firstCandidatePage(
                 for: pinyinComposition,
-                limit: Self.pinyinCandidatePageSize
+                limit: Self.pinyinCandidatePageSize,
+                symbolLimit: PinyinSymbolSuggestion.expandedLimit
             )
             pinyinCandidates = page.candidates
             hasMorePinyinCandidates = page.hasMore
@@ -1060,15 +1061,16 @@ final class KeyboardViewController: UIInputViewController,
                 candidateStack.addArrangedSubview(hint)
             } else {
                 let candidates = self.pinyinCandidates.isEmpty
-                    ? [(title: self.pinyinComposition, value: self.pinyinComposition)]
-                    : self.pinyinCandidates.map { (title: $0, value: $0) }
+                    ? [PinyinDisplayCandidate(
+                        text: self.pinyinComposition,
+                        source: .rawComposition,
+                        anchorText: nil
+                    )]
+                    : self.pinyinCandidates
 
                 for candidate in candidates {
                     candidateStack.addArrangedSubview(
-                        self.makeCandidateButton(
-                            title: candidate.title,
-                            value: candidate.value
-                        )
+                        self.makeCandidateButton(candidate)
                     )
                 }
             }
@@ -1082,9 +1084,11 @@ final class KeyboardViewController: UIInputViewController,
         }
     }
 
-    private func makeCandidateButton(title: String, value: String) -> PinyinCandidateButton {
+    private func makeCandidateButton(
+        _ candidate: PinyinDisplayCandidate
+    ) -> PinyinCandidateButton {
         var configuration = UIButton.Configuration.plain()
-        configuration.title = title
+        configuration.title = candidate.text
         configuration.baseForegroundColor = .label
         configuration.contentInsets = .init(
             top: 0,
@@ -1093,23 +1097,31 @@ final class KeyboardViewController: UIInputViewController,
             trailing: 10
         )
         let button = PinyinCandidateButton(configuration: configuration)
-        button.candidateValue = value
+        button.candidate = candidate
         button.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         button.addTarget(self, action: #selector(selectPinyinCandidate(_:)), for: .touchUpInside)
         addHapticFeedback(to: button)
-        button.accessibilityLabel = "输入候选词 \(title)"
+        button.accessibilityLabel = candidate.isSymbol
+            ? "输入表情 \(candidate.text)"
+            : "输入候选词 \(candidate.text)"
         return button
     }
 
     @objc private func selectPinyinCandidate(_ button: PinyinCandidateButton) {
-        commitPinyinCandidate(button.candidateValue)
+        commitPinyinCandidate(button.candidate)
     }
 
     private func makeExpandedPinyinCandidatePanel() -> UIView {
         if pinyinCandidates.isEmpty {
-            pinyinCandidates = [pinyinComposition]
+            pinyinCandidates = [
+                PinyinDisplayCandidate(
+                    text: pinyinComposition,
+                    source: .rawComposition,
+                    anchorText: nil
+                )
+            ]
             hasMorePinyinCandidates = false
         }
 
@@ -1152,9 +1164,11 @@ final class KeyboardViewController: UIInputViewController,
         if indexPath.item == 5 {
             cell.configureAsCollapseButton()
         } else if let candidateIndex = expandedCandidateIndex(for: indexPath.item) {
+            let candidate = pinyinCandidates[candidateIndex]
             cell.configure(
-                title: pinyinCandidates[candidateIndex],
-                isPrimary: candidateIndex == 0
+                title: candidate.text,
+                isPrimary: candidateIndex == 0,
+                isSymbol: candidate.isSymbol
             )
         } else {
             cell.configureAsPlaceholder()
@@ -1246,8 +1260,8 @@ final class KeyboardViewController: UIInputViewController,
             offset: nextPinyinCandidateOffset,
             limit: Self.pinyinCandidatePageSize
         )
-        var seen = Set(pinyinCandidates)
-        let newCandidates = page.candidates.filter { seen.insert($0).inserted }
+        var seen = Set(pinyinCandidates.map(\.text))
+        let newCandidates = page.candidates.filter { seen.insert($0.text).inserted }
         pinyinCandidates.append(contentsOf: newCandidates)
         hasMorePinyinCandidates = page.hasMore
         nextPinyinCandidateOffset = page.nextOffset
@@ -1869,14 +1883,14 @@ final class KeyboardViewController: UIInputViewController,
         reloadTypingKeyboard()
     }
 
-    private func commitPinyinCandidate(_ candidate: String) {
+    private func commitPinyinCandidate(_ candidate: PinyinDisplayCandidate) {
         guard !pinyinComposition.isEmpty else {
             return
         }
         let selection = PinyinInputEngine.selection(
             for: candidate,
             composition: pinyinComposition
-        ) ?? .committed(candidate)
+        ) ?? .committed(candidate.text)
         switch selection {
         case let .committed(text):
             replaceMarkedPinyinComposition(with: text)
@@ -1906,13 +1920,18 @@ final class KeyboardViewController: UIInputViewController,
             return false
         }
 
-        let value = pinyinCandidates.first
-            ?? PinyinInputEngine.candidates(for: pinyinComposition, limit: 1).first
-            ?? pinyinComposition
+        let value = pinyinCandidates.first { !$0.isSymbol }
+            ?? PinyinInputEngine.candidates(for: pinyinComposition, limit: 1)
+                .first { !$0.isSymbol }
+            ?? PinyinDisplayCandidate(
+                text: pinyinComposition,
+                source: .rawComposition,
+                anchorText: nil
+            )
         let selectedText = PinyinInputEngine.selectedText(
             for: value,
             composition: pinyinComposition
-        ) ?? value
+        ) ?? value.text
         replaceMarkedPinyinComposition(with: selectedText)
         return true
     }
@@ -3799,7 +3818,11 @@ final class KeyboardViewController: UIInputViewController,
 }
 
 private final class PinyinCandidateButton: UIButton {
-    var candidateValue = ""
+    var candidate = PinyinDisplayCandidate(
+        text: "",
+        source: .engine,
+        anchorText: nil
+    )
 }
 
 private final class PinyinCandidateCollectionCell: UICollectionViewCell {
@@ -3825,7 +3848,7 @@ private final class PinyinCandidateCollectionCell: UICollectionViewCell {
         }
     }
 
-    func configure(title: String, isPrimary: Bool) {
+    func configure(title: String, isPrimary: Bool, isSymbol: Bool = false) {
         titleLabel.text = title
         titleLabel.isHidden = false
         imageView.isHidden = true
@@ -3833,7 +3856,7 @@ private final class PinyinCandidateCollectionCell: UICollectionViewCell {
         contentView.backgroundColor = baseBackgroundColor
         isAccessibilityElement = true
         accessibilityTraits = .button
-        accessibilityLabel = "输入候选词 \(title)"
+        accessibilityLabel = isSymbol ? "输入表情 \(title)" : "输入候选词 \(title)"
     }
 
     func configureAsCollapseButton() {

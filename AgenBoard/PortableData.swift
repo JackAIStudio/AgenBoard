@@ -347,6 +347,9 @@ final class PortableDataService {
         SharedCommandStore.setKeyboardEnglishAutoCapitalizationEnabled(
             preferences.keyboard.englishAutoCapitalizationEnabled ?? false
         )
+        SharedCommandStore.setPinyinSymbolSuggestionsEnabled(
+            preferences.keyboard.pinyinSymbolSuggestionsEnabled ?? true
+        )
         if let module = preferences.keyboard.selectedModule,
            let rawValue = PortableKeyboardModule(rawValue: module)?.internalRawValue {
             SharedCommandStore.setKeyboardSelectedContentModuleRawValue(rawValue)
@@ -613,6 +616,8 @@ private struct PortablePreferencesDocument: Codable, Sendable {
                 hapticsEnabled: SharedCommandStore.keyboardHapticsEnabled(),
                 englishAutoCapitalizationEnabled:
                     SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled(),
+                pinyinSymbolSuggestionsEnabled:
+                    SharedCommandStore.pinyinSymbolSuggestionsEnabled(),
                 selectedModule: PortableKeyboardModule(
                     internalRawValue: SharedCommandStore.keyboardSelectedContentModuleRawValue()
                 )?.rawValue
@@ -646,6 +651,7 @@ private struct PortableKeyboardPreferences: Codable, Sendable {
     let showsQuickPhraseModule: Bool
     let hapticsEnabled: Bool
     let englishAutoCapitalizationEnabled: Bool?
+    let pinyinSymbolSuggestionsEnabled: Bool?
     let selectedModule: String?
 }
 

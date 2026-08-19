@@ -49,6 +49,8 @@ struct ContentView: View {
     @State private var keyboardHapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
     @State private var keyboardEnglishAutoCapitalizationEnabled =
         SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled()
+    @State private var pinyinSymbolSuggestionsEnabled =
+        SharedCommandStore.pinyinSymbolSuggestionsEnabled()
     @State private var showsGettingStartedGuide = false
     @State private var evaluatedInitialGuidePresentation = false
     @State private var keyboardAccessVerified =
@@ -598,6 +600,39 @@ struct ContentView: View {
                     .background(.thinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
 
+                    Toggle(
+                        isOn: Binding(
+                            get: { pinyinSymbolSuggestionsEnabled },
+                            set: { isEnabled in
+                                pinyinSymbolSuggestionsEnabled = isEnabled
+                                SharedCommandStore.setPinyinSymbolSuggestionsEnabled(isEnabled)
+                            }
+                        )
+                    ) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "face.smiling")
+                                .font(.title3)
+                                .frame(width: 28)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("拼音联想表情")
+                                    .font(.headline)
+
+                                Text(
+                                    pinyinSymbolSuggestionsEnabled
+                                        ? "输入拼音时在对应词后面显示表情"
+                                        : "只显示汉字候选"
+                                )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .padding(14)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
@@ -947,6 +982,8 @@ struct ContentView: View {
         keyboardHapticsEnabled = SharedCommandStore.keyboardHapticsEnabled()
         keyboardEnglishAutoCapitalizationEnabled =
             SharedCommandStore.keyboardEnglishAutoCapitalizationEnabled()
+        pinyinSymbolSuggestionsEnabled =
+            SharedCommandStore.pinyinSymbolSuggestionsEnabled()
     }
 
     private func recordingRequest(from url: URL) -> SharedRecordingToggleRequest? {

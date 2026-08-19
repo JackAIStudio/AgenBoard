@@ -17,6 +17,7 @@
 		4B1000032C10000100AB0001 /* AgenBoardKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B1000042C10000100AB0001 /* AgenBoardKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1000162C10000100AB0001 /* PinyinInputEngine.swift */; };
 		4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2000022C20000100AB0001 /* RimePinyinEngine.swift */; };
+		4B3000012C30000100AB0001 /* PinyinSymbolSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3000022C30000100AB0001 /* PinyinSymbolSuggestion.swift */; };
 		4B2000032C20000100AB0001 /* RimeData in Resources */ = {isa = PBXBuildFile; fileRef = 4B2000042C20000100AB0001 /* RimeData */; };
 		4B2000052C20000100AB0001 /* LibrimeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B2000062C20000100AB0001 /* LibrimeKit */; };
 		4E4000012C40000100AB0001 /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */; };
@@ -78,6 +79,7 @@
 		4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgenBoardKeyboard.entitlements; sourceTree = "<group>"; };
 		4B1000162C10000100AB0001 /* PinyinInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinInputEngine.swift; sourceTree = "<group>"; };
 		4B2000022C20000100AB0001 /* RimePinyinEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimePinyinEngine.swift; sourceTree = "<group>"; };
+		4B3000022C30000100AB0001 /* PinyinSymbolSuggestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinSymbolSuggestion.swift; sourceTree = "<group>"; };
 		4B2000042C20000100AB0001 /* RimeData */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeData; sourceTree = "<group>"; };
 		4E4000032C40000100AB0001 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
 		4E4000042C40000100AB0001 /* HotwordLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotwordLibraryView.swift; sourceTree = "<group>"; };
@@ -174,6 +176,7 @@
 				56A000042CC0000100AB0001 /* LegacyKeyboardHostResolver.swift */,
 				4B1000162C10000100AB0001 /* PinyinInputEngine.swift */,
 				4B2000022C20000100AB0001 /* RimePinyinEngine.swift */,
+				4B3000022C30000100AB0001 /* PinyinSymbolSuggestion.swift */,
 				4B2000042C20000100AB0001 /* RimeData */,
 				4B1000112C10000100AB0001 /* AgenBoardKeyboard.entitlements */,
 				4B1000082C10000100AB0001 /* Info.plist */,
@@ -333,6 +336,7 @@
 				56A000022CC0000100AB0001 /* LegacyKeyboardHostResolver.swift in Sources */,
 				4B1000172C10000100AB0001 /* PinyinInputEngine.swift in Sources */,
 				4B2000012C20000100AB0001 /* RimePinyinEngine.swift in Sources */,
+				4B3000012C30000100AB0001 /* PinyinSymbolSuggestion.swift in Sources */,
 				4A6E7A672C00100100AB0001 /* SharedCommandStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

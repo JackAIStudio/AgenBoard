@@ -1,11 +1,5 @@
 import Foundation
 
-struct PinyinCandidatePage {
-    let candidates: [String]
-    let hasMore: Bool
-    let nextOffset: Int
-}
-
 enum PinyinCandidateSelection: Equatable {
     case committed(String)
     case composing(markedText: String)
@@ -24,13 +18,17 @@ struct PinyinInputEngine {
         _ = knownSyllables
     }
 
-    static func candidates(for composition: String, limit: Int = 12) -> [String] {
+    static func candidates(
+        for composition: String,
+        limit: Int = 12
+    ) -> [PinyinDisplayCandidate] {
         firstCandidatePage(for: composition, limit: limit).candidates
     }
 
     static func firstCandidatePage(
         for composition: String,
-        limit: Int = 48
+        limit: Int = 48,
+        symbolLimit: Int = PinyinSymbolSuggestion.compactLimit
     ) -> PinyinCandidatePage {
         // Warmup normally finishes before the first key. If a host opens the
         // extension and immediately types, wait for the same serialized setup
@@ -43,13 +41,16 @@ struct PinyinInputEngine {
             for: composition,
             limit: limit
         ) {
-            return page
+            return decoratedPage(page, symbolLimit: symbolLimit)
         }
 
-        return fallbackCandidatePage(
-            for: composition,
-            offset: 0,
-            limit: limit
+        return decoratedPage(
+            fallbackCandidatePage(
+                for: composition,
+                offset: 0,
+                limit: limit
+            ),
+            symbolLimit: symbolLimit
         )
     }
 
@@ -63,33 +64,50 @@ struct PinyinInputEngine {
             offset: offset,
             limit: limit
         ) {
-            return page
+            return decoratedPage(page, symbolLimit: PinyinSymbolSuggestion.expandedLimit)
         }
 
-        return fallbackCandidatePage(
-            for: composition,
-            offset: offset,
-            limit: limit
+        return decoratedPage(
+            fallbackCandidatePage(
+                for: composition,
+                offset: offset,
+                limit: limit
+            ),
+            symbolLimit: PinyinSymbolSuggestion.expandedLimit
         )
     }
 
     static func selection(
-        for candidate: String,
+        for candidate: PinyinDisplayCandidate,
         composition: String
     ) -> PinyinCandidateSelection? {
-        RimePinyinEngine.shared.selectCandidate(
-            candidate,
+        if candidate.isSymbol {
+            PinyinSymbolSuggestion.recordSelection(candidate)
+            return .committed(candidate.text)
+        }
+        if candidate.source == .rawComposition {
+            return .committed(candidate.text)
+        }
+        return RimePinyinEngine.shared.selectCandidate(
+            candidate.text,
             for: composition,
             commitRemainingComposition: false
         )
     }
 
     static func selectedText(
-        for candidate: String,
+        for candidate: PinyinDisplayCandidate,
         composition: String
     ) -> String? {
+        if candidate.isSymbol {
+            PinyinSymbolSuggestion.recordSelection(candidate)
+            return candidate.text
+        }
+        if candidate.source == .rawComposition {
+            return candidate.text
+        }
         guard case let .committed(text) = RimePinyinEngine.shared.selectCandidate(
-            candidate,
+            candidate.text,
             for: composition,
             commitRemainingComposition: true
         ) else {
@@ -197,9 +215,25 @@ struct PinyinInputEngine {
 
         let endIndex = min(offset + limit, candidates.count)
         return PinyinCandidatePage(
-            candidates: Array(candidates[offset..<endIndex]),
+            candidates: Array(candidates[offset..<endIndex]).map { item in
+                PinyinDisplayCandidate(text: item, source: .engine, anchorText: nil)
+            },
             hasMore: endIndex < candidates.count,
             nextOffset: endIndex
+        )
+    }
+
+    private static func decoratedPage(
+        _ page: PinyinCandidatePage,
+        symbolLimit: Int
+    ) -> PinyinCandidatePage {
+        PinyinCandidatePage(
+            candidates: PinyinSymbolSuggestion.decorate(
+                page.candidates.map(\.text),
+                limit: symbolLimit
+            ),
+            hasMore: page.hasMore,
+            nextOffset: page.nextOffset
         )
     }
 

@@ -186,7 +186,7 @@ struct GettingStartedView: View {
                 .font(.headline)
                 .foregroundStyle(.blue)
 
-            Text("AgenBoard 需要通过 App Group 在键盘与主 App 之间同步录音指令、识别结果、设置、热词和快捷短语。不开启时，普通键盘仍可输入，但语音回填和同步功能无法正常工作。")
+            Text("AgenBoard 需要通过 App Group 在键盘与主 App 之间同步录音指令、识别结果、设置、热词、快捷短语和拼音联想表情偏好。不开启时，普通键盘仍可输入，但语音回填和同步功能无法正常工作。")
 
             Divider()
 
