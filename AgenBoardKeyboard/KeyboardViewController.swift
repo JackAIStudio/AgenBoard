@@ -116,6 +116,8 @@ final class KeyboardViewController: UIInputViewController,
         var finalizedSegmentID: String?
         var copiedFinalText = false
         var finalizationFailed = false
+        var failureReason: String? = nil
+        var isOfflineOrNetworkFailure = false
     }
 
     private let rootStack = UIStackView()
@@ -2610,28 +2612,43 @@ final class KeyboardViewController: UIInputViewController,
         let snapshotError = statusAge >= -0.5 && statusAge < 30
             ? voiceErrorMessage(from: snapshot.status)
             : nil
-        if let snapshotError,
-           !isActive,
-           !isPreparing,
-           !isTranscribing,
-           let failedIndex = voiceFinalizationDecisions.lastIndex(
-               where: {
-                   $0.finalText == nil
-                       && !$0.finalizationFailed
-                       && $0.resolution != .finalInserted
-               }
-           ) {
-            voiceFinalizationDecisions[failedIndex].finalizationFailed = true
-            SharedCommandStore.recordKeyboardDiagnostic(
-                "voice_finalization_failed",
-                detail: "stop=\(voiceFinalizationDecisions[failedIndex].stopRequestID) message=\(snapshotError)"
-            )
+        let isSnapshotOffline = snapshot.status.contains("未连接")
+            || snapshot.status.contains("无网络")
+            || snapshot.status.contains("网络异常")
+            || snapshot.status.contains("离线")
+            || snapshot.status.contains("连接中断")
+            || snapshot.status.contains("暂不可用")
+
+        if !isActive, !isPreparing, !isTranscribing {
+            if let snapshotError {
+                for index in voiceFinalizationDecisions.indices
+                where voiceFinalizationDecisions[index].finalText == nil
+                    && !voiceFinalizationDecisions[index].finalizationFailed
+                    && voiceFinalizationDecisions[index].resolution != .finalInserted {
+                    voiceFinalizationDecisions[index].finalizationFailed = true
+                    voiceFinalizationDecisions[index].isOfflineOrNetworkFailure = isSnapshotOffline
+                    voiceFinalizationDecisions[index].failureReason = snapshotError
+                    SharedCommandStore.recordKeyboardDiagnostic(
+                        "voice_finalization_failed",
+                        detail: "stop=\(voiceFinalizationDecisions[index].stopRequestID) message=\(snapshotError)"
+                    )
+                }
+            } else if isSnapshotOffline {
+                for index in voiceFinalizationDecisions.indices
+                where voiceFinalizationDecisions[index].finalText == nil
+                    && !voiceFinalizationDecisions[index].finalizationFailed
+                    && voiceFinalizationDecisions[index].resolution != .finalInserted {
+                    voiceFinalizationDecisions[index].finalizationFailed = true
+                    voiceFinalizationDecisions[index].isOfflineOrNetworkFailure = true
+                    voiceFinalizationDecisions[index].failureReason = "当前无网络 · 录音已保存至历史"
+                }
+            }
         }
         let liveTranscript = snapshot.transcript.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
         if isActive {
-            updateLiveTranscript(liveTranscript)
+            updateLiveTranscript(liveTranscript, status: snapshot.status)
             if !liveTranscript.isEmpty,
                !didRenderLiveTranscriptForCurrentSegment {
                 didRenderLiveTranscriptForCurrentSegment = true
@@ -2690,7 +2707,12 @@ final class KeyboardViewController: UIInputViewController,
                 : snapshot.status
             statusLabel.textColor = .secondaryLabel
         } else if isActive {
-            statusLabel.text = nil
+            if isSnapshotOffline {
+                statusLabel.text = "正在本地录音（网络未连接）"
+                statusLabel.textColor = .systemOrange
+            } else {
+                statusLabel.text = nil
+            }
         } else if isTranscribing {
             statusLabel.textColor = .secondaryLabel
             statusLabel.text = "点击开始下一段"
@@ -2712,6 +2734,7 @@ final class KeyboardViewController: UIInputViewController,
         updateVoiceFinalizationPresentation(
             isRecording: isActive,
             isTranscribing: isTranscribing,
+            isSnapshotOffline: isSnapshotOffline,
             now: now
         )
     }
@@ -2743,6 +2766,7 @@ final class KeyboardViewController: UIInputViewController,
     private func updateVoiceFinalizationPresentation(
         isRecording: Bool,
         isTranscribing: Bool,
+        isSnapshotOffline: Bool,
         now: TimeInterval
     ) {
         guard let activityRow = voiceActivityRow,
@@ -2782,9 +2806,17 @@ final class KeyboardViewController: UIInputViewController,
            }) ?? true) {
             let decision = voiceFinalizationDecisions[failureIndex]
             showsRow = true
-            activityLabel.text = decision.resolution == .waiting
-                ? "上一段整理失败"
-                : "上一段整理失败，已保留实时稿"
+            if decision.isOfflineOrNetworkFailure {
+                activityLabel.text = decision.rawText.isEmpty
+                    ? "当前无网络 · 录音已保存至历史"
+                    : "当前无网络 · 已保留实时稿"
+                activityLabel.textColor = .systemOrange
+            } else {
+                activityLabel.text = decision.resolution == .waiting
+                    ? (decision.failureReason ?? "上一段整理失败")
+                    : "上一段整理失败，已保留实时稿"
+                activityLabel.textColor = .secondaryLabel
+            }
             setVoiceActivityActionTitle(
                 decision.resolution == .waiting && !decision.rawText.isEmpty
                     ? "使用实时稿"
@@ -2798,9 +2830,14 @@ final class KeyboardViewController: UIInputViewController,
             actionButton.accessibilityLabel = "使用上一段实时稿"
         } else if let waitingIndex {
             let decision = voiceFinalizationDecisions[waitingIndex]
-            let hasWaitedLongEnough = now - decision.stopRequestedAt
-                >= Self.finalizationPromptDelay
-            if hasWaitedLongEnough {
+            let waitDuration = now - decision.stopRequestedAt
+            if !isTranscribing && waitDuration >= 1.5 {
+                voiceFinalizationDecisions[waitingIndex].finalizationFailed = true
+                voiceFinalizationDecisions[waitingIndex].isOfflineOrNetworkFailure = isSnapshotOffline
+                voiceFinalizationDecisions[waitingIndex].failureReason = isSnapshotOffline
+                    ? "当前无网络 · 录音已保存至历史"
+                    : "上一段整理未完成"
+            } else if waitDuration >= Self.finalizationPromptDelay {
                 showsRow = true
                 activityLabel.text = "上一段正在整理…"
                 setVoiceActivityActionTitle(
@@ -2852,12 +2889,21 @@ final class KeyboardViewController: UIInputViewController,
     private func voiceErrorMessage(from status: String) -> String? {
         let errorMarkers = [
             "失败", "错误", "权限", "未授权", "拒绝", "不允许", "不可用",
-            "未识别到文字", "未能", "无法"
+            "未识别到文字", "未能", "无法",
+            "未连接", "无网络", "网络异常", "离线", "超时", "连接中断", "offline"
         ]
         guard errorMarkers.contains(where: status.contains) else {
             return nil
         }
         let normalizedStatus = status.lowercased()
+        if status.contains("未连接")
+            || status.contains("无网络")
+            || status.contains("网络异常")
+            || status.contains("离线")
+            || status.contains("连接中断")
+            || normalizedStatus.contains("offline") {
+            return "当前无网络 · 录音已保存至历史"
+        }
         if status.contains("未识别到文字") {
             return "未识别到文字，请重试"
         }
@@ -3011,18 +3057,48 @@ final class KeyboardViewController: UIInputViewController,
         voiceActivityRow?.isHidden = true
     }
 
-    private func updateLiveTranscript(_ transcript: String) {
+    private func updateLiveTranscript(_ transcript: String, status: String) {
         guard let liveTranscriptView else {
             return
         }
 
+        let isOffline = status.contains("未连接")
+            || status.contains("无网络")
+            || status.contains("网络异常")
+            || status.contains("离线")
+            || status.contains("连接中断")
+            || status.contains("暂不可用")
+        let isConnecting = status.contains("实时连接中") || status.contains("正在连接")
+
         let isEmpty = transcript.isEmpty
-        let displayedText = isEmpty ? "正在聆听…" : transcript
-        liveTranscriptView.textColor = isEmpty ? .secondaryLabel : .label
+        let displayedText: String
+        let textColor: UIColor
+        let bgColor: UIColor
+
+        if isEmpty {
+            if isOffline {
+                displayedText = "正在本地录音 · 网络未连接"
+                textColor = .systemOrange
+                bgColor = UIColor.systemOrange.withAlphaComponent(0.12)
+            } else if isConnecting {
+                displayedText = "正在录音 · 正在连接…"
+                textColor = .secondaryLabel
+                bgColor = .secondarySystemBackground
+            } else {
+                displayedText = "正在聆听…"
+                textColor = .secondaryLabel
+                bgColor = .secondarySystemBackground
+            }
+        } else {
+            displayedText = transcript
+            textColor = .label
+            bgColor = .secondarySystemBackground
+        }
+
+        liveTranscriptView.textColor = textColor
+        liveTranscriptView.backgroundColor = bgColor
         liveTranscriptView.textAlignment = isEmpty ? .center : .natural
-        liveTranscriptView.accessibilityLabel = isEmpty
-            ? "正在聆听"
-            : "实时识别：\(transcript)"
+        liveTranscriptView.accessibilityLabel = displayedText
 
         guard liveTranscriptView.text != displayedText else {
             return

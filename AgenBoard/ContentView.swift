@@ -846,6 +846,10 @@ struct ContentView: View {
             )
             configurePictureInPictureActions()
             pip.prepareForAutomaticStart()
+
+            NetworkMonitor.shared.onNetworkRestored = { [weak historyStore] in
+                historyStore?.autoRetryPendingOfflineRecordings()
+            }
         }
         .onChange(of: recorder.isRecording) { _, isRecording in
             pip.setRecordingState(isRecording)
@@ -900,6 +904,9 @@ struct ContentView: View {
                 }
                 handleLatestSharedRecordingRequest()
                 scheduleAutomaticReturnIfReady()
+                if NetworkMonitor.shared.isConnected {
+                    historyStore.autoRetryPendingOfflineRecordings()
+                }
                 return
             }
 

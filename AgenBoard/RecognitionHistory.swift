@@ -85,6 +85,32 @@ struct RecognitionHistoryItem: Identifiable, Codable, Equatable, Sendable {
         finalizationPending ?? false
     }
 
+    var hasAnyTranscript: Bool {
+        if let original = resolvedOriginalResult?.transcript, !original.isEmpty {
+            return true
+        }
+        if let withHw = transcriptWithHotwords, !withHw.isEmpty {
+            return true
+        }
+        if let withoutHw = transcriptWithoutHotwords, !withoutHw.isEmpty {
+            return true
+        }
+        return false
+    }
+
+    var isPendingTranscription: Bool {
+        !hasAnyTranscript && hasRecording && !isFinalizationPending
+    }
+
+    var isOfflinePending: Bool {
+        guard isPendingTranscription else { return false }
+        if let lastError {
+            let lower = lastError.lowercased()
+            return lower.contains("网络") || lower.contains("network") || lower.contains("连接") || lower.contains("离线") || lower.contains("超时") || lower.contains("未连接")
+        }
+        return true
+    }
+
     func transcript(for mode: RecognitionHotwordMode) -> String? {
         switch mode {
         case .withHotwords:
@@ -439,6 +465,88 @@ final class RecognitionHistoryStore: ObservableObject {
             storageMessage = ""
         } catch {
             storageMessage = "识别错误记录保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    var pendingOfflineItems: [RecognitionHistoryItem] {
+        items.filter { $0.isOfflinePending && !$0.isFinalizationPending }
+    }
+
+    func markFinalizationPending(itemID: UUID, isPending: Bool) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+        items[index].finalizationPending = isPending
+        try? persist()
+    }
+
+    @discardableResult
+    func retryOfflineItem(
+        _ item: RecognitionHistoryItem,
+        progress: (@MainActor @Sendable (String) -> Void)? = nil
+    ) async -> Bool {
+        guard item.hasRecording else { return false }
+        markFinalizationPending(itemID: item.id, isPending: true)
+
+        let libraryEntries = HotwordLibraryStorage.loadEntries()
+        let hotwords = libraryEntries.map(\.term)
+        let activeHotwords = HotwordSelectionPolicy.selectedTerms(
+            from: libraryEntries,
+            provider: .volcRealtime
+        )
+
+        do {
+            let output = try await VolcRealtimeSpeechTranscriber.transcribe(
+                audioURL: audioURL(for: item),
+                hotwords: activeHotwords,
+                playbackRate: 5.0
+            ) { status in
+                progress?(status)
+            }
+
+            let transcript = SpeechTranscriptNormalizer.normalize(
+                output.serviceOutput.transcript,
+                replacementRules: ReplacementLibraryStorage.loadRules()
+            )
+            let matchedTerms = HotwordTranscriptMatcher.matches(
+                in: transcript,
+                hotwords: hotwords
+            )
+            HotwordLibraryStorage.markTermsUsed(matchedTerms)
+
+            try storeTranscription(
+                itemID: item.id,
+                mode: item.originalMode ?? .withHotwords,
+                transcript: transcript,
+                elapsed: output.metrics.finalizationElapsed,
+                configuredHotwordCount: output.serviceOutput.configuredHotwordCount,
+                matchedTerms: matchedTerms,
+                provider: .volcRealtime,
+                words: output.serviceOutput.words,
+                realtimeMetrics: output.metrics
+            )
+            return true
+        } catch {
+            storeFailure(
+                itemID: item.id,
+                mode: item.originalMode ?? .withHotwords,
+                provider: .volcRealtime,
+                message: "重试转写失败：\(error.localizedDescription)"
+            )
+            return false
+        }
+    }
+
+    func autoRetryPendingOfflineRecordings() {
+        loadIfNeeded()
+        guard canAccessStorage else { return }
+
+        let pending = pendingOfflineItems
+        guard !pending.isEmpty else { return }
+
+        Task { @MainActor in
+            for item in pending {
+                guard NetworkMonitor.shared.isConnected else { break }
+                _ = await retryOfflineItem(item)
+            }
         }
     }
 

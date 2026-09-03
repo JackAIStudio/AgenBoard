@@ -50,6 +50,7 @@ final class SpeechRecorder: ObservableObject {
     private var recorder: AVAudioRecorder?
     private var realtimeCapture: RealtimeAudioCapture?
     private var realtimeSession: VolcRealtimeSpeechSession?
+    private var realtimeConnectionTask: Task<Void, Never>?
     private var realtimeAudioSendingTask: Task<Void, Error>?
     private var livePreviewRecognitionRequest:
         SFSpeechAudioBufferRecognitionRequest?
@@ -488,7 +489,7 @@ final class SpeechRecorder: ObservableObject {
             isPreparingRecording = false
             isRecording = true
             status = currentProvider == .volcRealtime
-                ? "可以说话 · 豆包实时链路已就绪"
+                ? "可以说话 · 正在录音（实时连接中…）"
                 : "可以说话 · 正在录音"
             publishRecordingSnapshot(status: status)
             startMetering()
@@ -498,6 +499,8 @@ final class SpeechRecorder: ObservableObject {
             )
             publishRequestResponse(for: request, phase: .recording)
         } catch is CancellationError {
+            realtimeConnectionTask?.cancel()
+            realtimeConnectionTask = nil
             realtimeAudioSendingTask?.cancel()
             realtimeAudioSendingTask = nil
             stopAppleLivePreview()
@@ -515,6 +518,8 @@ final class SpeechRecorder: ObservableObject {
             )
             deactivateAudioSession()
         } catch {
+            realtimeConnectionTask?.cancel()
+            realtimeConnectionTask = nil
             realtimeAudioSendingTask?.cancel()
             realtimeAudioSendingTask = nil
             stopAppleLivePreview()
@@ -556,7 +561,36 @@ final class SpeechRecorder: ObservableObject {
         if pendingRecordingURL == url {
             pendingRecordingURL = nil
         }
+        // 关键资产保护：若文件存在且包含有效音频（超过 1KB），绝不静默删除，而是救援归档至历史记录供用户恢复
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int64, size > 1_024 {
+            _ = try? historyStore.archiveRecording(
+                at: url,
+                duration: max(0.5, recordingDuration),
+                originalMode: currentRecognitionMode,
+                originalProvider: currentProvider
+            )
+            return
+        }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    private func withThrowingTimeout<T: Sendable>(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw VolcSpeechServiceError.timeout("连接超时（\(String(format: "%.1f", seconds)) 秒未响应）")
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
     }
 
     private func prepareRecognitionContext() {
@@ -579,10 +613,10 @@ final class SpeechRecorder: ObservableObject {
         segmentID: UUID,
         request: SharedRecordingToggleRequest?
     ) async throws {
-        // 麦克风是唯一不能事后补回的输入，因此先开始采集并使用无界
-        // AsyncStream 完整保存短暂的冷启动积压。热词和 WebSocket 在采集期间
-        // 准备；连接成功后再以受控速度追赶，绝不突发发送或静默丢帧。
-        status = "正在启动麦克风和完整音频缓存"
+        // 麦克风是唯一不能事后补回的输入，优先保证本地秒开与持续安全落盘。
+        // 音频帧通过无界 AsyncStream 完整缓存，云端 WebSocket 异步建立并在后台按需推流追赶，
+        // 遇到无网、欠费或连接超时时绝不阻塞或打断本地录音。
+        status = "正在启动麦克风"
         publishRecordingSnapshot(status: status)
 
         let (audioStream, continuation) = AsyncStream<Data>.makeStream(
@@ -607,10 +641,41 @@ final class SpeechRecorder: ObservableObject {
             request: request
         )
 
-        status = "麦克风已启动 · 正在准备豆包实时链路"
-        publishRecordingSnapshot(status: status)
+        // 异步建立豆包实时链路，解耦云端握手与本地麦克风
+        realtimeConnectionTask?.cancel()
+        realtimeConnectionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.connectAndStreamVolcRealtime(
+                audioStream: audioStream,
+                capture: capture,
+                segmentID: segmentID,
+                request: request
+            )
+        }
+    }
+
+    private func connectAndStreamVolcRealtime(
+        audioStream: AsyncStream<Data>,
+        capture: RealtimeAudioCapture,
+        segmentID: UUID,
+        request: SharedRecordingToggleRequest?
+    ) async {
+        guard activeSegmentID == segmentID, isRecording || isPreparingRecording else {
+            return
+        }
+
+        let config: VolcSpeechConfiguration
+        do {
+            config = try VolcSpeechConfiguration.load()
+        } catch {
+            guard activeSegmentID == segmentID, isRecording else { return }
+            status = "正在本地录音 · 豆包配置不可用"
+            publishRecordingSnapshot(status: status)
+            return
+        }
+
         let session = VolcRealtimeSpeechSession(
-            configuration: try VolcSpeechConfiguration.load(),
+            configuration: config,
             hotwords: currentActiveHotwords,
             transcriptionMode: SpeechServicePreferences.volcRealtimeTranscriptionMode,
             launchRequest: request
@@ -631,49 +696,56 @@ final class SpeechRecorder: ObservableObject {
             }
             self.publishRecordingSnapshot(status: self.status)
         }
-        realtimeSession = session
-        status = "麦克风正在缓存 · 正在连接豆包语音"
-        publishRecordingSnapshot(status: status)
-        try await session.connect()
-        RecordingLaunchMetrics.mark(
-            "main_realtime_connection_ready",
-            request: request
-        )
-        try await waitForRealtimeFirstAudioFrame(
-            capture: capture,
-            request: request
-        )
 
-        realtimeAudioSendingTask = Task { @MainActor [weak self, session, capture] in
-            guard let self else {
-                throw CancellationError()
+        do {
+            try await withThrowingTimeout(seconds: 3.5) {
+                try await session.connect()
+            }
+            guard activeSegmentID == segmentID, isRecording || isPreparingRecording else {
+                session.cancel()
+                return
+            }
+            realtimeSession = session
+            RecordingLaunchMetrics.mark(
+                "main_realtime_connection_ready",
+                request: request
+            )
+            if isRecording {
+                status = "正在录音 · 豆包实时链路已就绪"
+                publishRecordingSnapshot(status: status)
             }
 
-            do {
-                try await self.sendVolcRealtimeAudioStream(
-                    audioStream,
-                    to: session,
-                    capture: capture,
-                    request: request
-                )
-            } catch {
-                if !Task.isCancelled,
-                   self.isPreparingRecording || self.isRecording {
-                    self.status = "豆包实时连接异常"
-                    self.publishRecordingSnapshot(status: self.status)
+            realtimeAudioSendingTask = Task { @MainActor [weak self, session, capture] in
+                guard let self else { throw CancellationError() }
+                do {
+                    try await self.sendVolcRealtimeAudioStream(
+                        audioStream,
+                        to: session,
+                        capture: capture,
+                        request: request
+                    )
+                } catch {
+                    if !Task.isCancelled,
+                       self.isPreparingRecording || self.isRecording {
+                        self.status = "正在本地录音 · 实时识别已中断（录音继续中）"
+                        self.publishRecordingSnapshot(status: self.status)
+                    }
+                    throw error
                 }
-                throw error
+            }
+        } catch {
+            guard activeSegmentID == segmentID, isRecording || isPreparingRecording else {
+                session.cancel()
+                return
+            }
+            // 核心容错：网络断开、超时或欠费只影响实时转写，绝对不中断本地麦克风录制！
+            session.cancel()
+            realtimeSession = nil
+            if isRecording {
+                status = "正在本地录音 · 网络未连接，实时转写暂不可用"
+                publishRecordingSnapshot(status: status)
             }
         }
-
-        RecordingLaunchMetrics.mark(
-            "main_realtime_pipeline_ready",
-            request: request,
-            detail: String(
-                format: "buffered_audio_ms=%.1f",
-                recordingDuration * 1_000
-            )
-        )
     }
 
     private func startAppleRealtimePreviewCapture(
@@ -957,6 +1029,8 @@ final class SpeechRecorder: ObservableObject {
             }
         }
 
+        realtimeConnectionTask?.cancel()
+        realtimeConnectionTask = nil
         realtimeSession = nil
         realtimeAudioSendingTask = nil
         currentLaunchRequest = nil
@@ -1090,9 +1164,16 @@ final class SpeechRecorder: ObservableObject {
             }
             try Task.checkCancellation()
             guard let session = job.realtimeSession else {
-                throw VolcSpeechServiceError.taskFailed(
-                    "豆包实时识别会话不存在，请重新录音后再试。"
+                updateFinalizationStatus(
+                    job,
+                    message: "本段录音已保存至历史 · 网络未连接，可在恢复后重试转写"
                 )
+                failFinalization(
+                    job,
+                    message: "网络未连接，录音已完整保存，恢复网络后可重试转写。",
+                    presentsError: false
+                )
+                return
             }
             updateFinalizationStatus(
                 job,
@@ -1124,7 +1205,7 @@ final class SpeechRecorder: ObservableObject {
                     let recovered = try await VolcRealtimeSpeechTranscriber.transcribe(
                         audioURL: job.audioURL,
                         hotwords: job.activeHotwords,
-                        playbackRate: 1.5,
+                        playbackRate: 5.0,
                         launchRequest: job.launchRequest
                     ) { [weak self] progress in
                         self?.updateFinalizationStatus(job, message: progress)
@@ -1200,10 +1281,15 @@ final class SpeechRecorder: ObservableObject {
             job.realtimeSession?.cancel()
         } catch {
             job.realtimeSession?.cancel()
+            let errorMsg = error.localizedDescription
+            let isNetworkError = errorMsg.contains("网络") || errorMsg.contains("连接") || errorMsg.contains("超时") || errorMsg.contains("The Internet connection appears to be offline") || errorMsg.contains("timed out")
+            let friendlyMessage = isNetworkError
+                ? "网络连接异常，录音已完整保存，恢复网络后可重试转写。"
+                : "豆包实时识别未完成：\(errorMsg)"
             failFinalization(
                 job,
-                message: "豆包实时识别失败：\(error.localizedDescription)",
-                presentsError: true
+                message: friendlyMessage,
+                presentsError: !isNetworkError
             )
         }
     }

@@ -36,7 +36,7 @@ enum VolcRealtimeSpeechTranscriber {
     static func transcribe(
         audioURL: URL,
         hotwords: [String],
-        playbackRate: Double = 1,
+        playbackRate: Double = 5.0,
         launchRequest: SharedRecordingToggleRequest? = nil,
         progress: @escaping ProgressHandler
     ) async throws -> VolcRealtimeRecognitionOutput {
@@ -61,7 +61,7 @@ enum VolcRealtimeSpeechTranscriber {
                 playbackRate > 1
                     ? String(
                         format: "豆包实时 · 正在以 %.1f 倍速恢复缓存",
-                        min(1.5, playbackRate)
+                        min(6.0, playbackRate)
                     )
                     : "豆包实时 · 正在按录音原速推流"
             )
@@ -199,7 +199,7 @@ enum VolcRealtimeSpeechTranscriber {
         playbackRate: Double,
         startedAt: Date
     ) async throws {
-        let safePlaybackRate = max(1, min(1.5, playbackRate))
+        let safePlaybackRate = max(1, min(6.0, playbackRate))
         let targetElapsed = Double(sentByteCount)
             / Double(bytesPerSecond)
             / safePlaybackRate
@@ -544,11 +544,11 @@ final class VolcRealtimeSpeechSession {
             throw terminalError
         }
         startTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
             guard !Task.isCancelled, let self, !self.didStart else {
                 return
             }
-            self.fail(VolcSpeechServiceError.timeout("火山引擎实时识别连接超时。"))
+            self.fail(VolcSpeechServiceError.timeout("火山引擎实时识别连接超时（请检查网络连接）。"))
         }
         try await withCheckedThrowingContinuation { continuation in
             startWaiter = continuation

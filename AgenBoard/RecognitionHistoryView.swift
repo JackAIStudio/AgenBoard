@@ -20,6 +20,28 @@ struct RecognitionHistoryListView: View {
                 }
             }
 
+            if !store.pendingOfflineItems.isEmpty {
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("发现 \(store.pendingOfflineItems.count) 条离线待转写录音")
+                                .font(.subheadline.weight(.semibold))
+                            Text("本地录音已完整保存，网络恢复后可一键批量转写。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("全部转写") {
+                            store.autoRetryPendingOfflineRecordings()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!NetworkMonitor.shared.isConnected)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             if store.items.isEmpty {
                 ContentUnavailableView(
                     "还没有识别历史",
@@ -99,12 +121,21 @@ private struct RecognitionHistoryRow: View {
         if let transcript = item.transcriptWithoutHotwords, !transcript.isEmpty {
             return transcript
         }
+        if item.isFinalizationPending {
+            return "正在整理转写文字…"
+        }
+        if item.isOfflinePending {
+            return "离线录音已保存（等待转写）"
+        }
         return "待转写"
     }
 
     private var resultStatus: String {
         if item.isFinalizationPending {
             return "\(item.originalProvider?.shortTitle ?? "识别") · 整理中"
+        }
+        if item.isOfflinePending {
+            return "离线未转写 · 录音已保存"
         }
         if let originalResult = item.resolvedOriginalResult {
             let rerunCount = item.availableRerunResults.count
@@ -253,23 +284,52 @@ struct RecognitionHistoryDetailView: View {
             .foregroundStyle(.secondary)
 
             if item.hasRecording {
-                Button {
-                    do {
-                        try playback.toggle(url: store.audioURL(for: item))
-                    } catch {
-                        alertMessage = "无法播放录音：\(error.localizedDescription)"
-                        showsAlert = true
+                HStack(spacing: 12) {
+                    Button {
+                        do {
+                            try playback.toggle(url: store.audioURL(for: item))
+                        } catch {
+                            alertMessage = "无法播放录音：\(error.localizedDescription)"
+                            showsAlert = true
+                        }
+                    } label: {
+                        Label(
+                            playback.isPlaying ? "停止播放" : "播放原音频",
+                            systemImage: playback.isPlaying ? "stop.fill" : "play.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
                     }
-                } label: {
-                    Label(
-                        playback.isPlaying ? "停止播放" : "播放原音频",
-                        systemImage: playback.isPlaying ? "stop.fill" : "play.fill"
-                    )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .buttonStyle(.bordered)
+                    .disabled(isRunning)
+
+                    ShareLink(item: store.audioURL(for: item)) {
+                        Label("导出音频", systemImage: "square.and.arrow.up")
+                            .frame(height: 44)
+                            .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRunning)
                 }
-                .buttonStyle(.bordered)
-                .disabled(isRunning)
+
+                if item.isOfflinePending {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "wifi.slash")
+                            .foregroundStyle(.orange)
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("录音已完整保存在本地（离线录制）")
+                                .font(.subheadline.weight(.medium))
+                            Text(item.lastError ?? "录制时网络未连接。恢复网络后可一键转写为文字。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
             } else {
                 Label("此历史仅包含转写文本，未附原始录音", systemImage: "waveform.slash")
                     .font(.callout)
@@ -345,8 +405,8 @@ struct RecognitionHistoryDetailView: View {
                 runTranscriptions([selectedMode], item: item)
             } label: {
                 Label(
-                    "重新转写所选模式",
-                    systemImage: "waveform.badge.magnifyingglass"
+                    item.isOfflinePending ? "立即转写此离线录音" : "重新转写所选模式",
+                    systemImage: item.isOfflinePending ? "bolt.horizontal.fill" : "waveform.badge.magnifyingglass"
                 )
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
