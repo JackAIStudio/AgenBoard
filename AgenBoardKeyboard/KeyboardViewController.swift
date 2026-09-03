@@ -1966,21 +1966,10 @@ final class KeyboardViewController: UIInputViewController,
         }
 
         let rawComposition = pinyinComposition
-
-        // Explicitly remove the marked range before inserting the original
-        // letters as confirmed text. Merely replacing the preedit with the same
-        // value (for example, "test" -> "test") can leave the underline active
-        // in some hosts, while Rime may also display separators such as
-        // "a gen". Clearing first handles both cases reliably.
-        textDocumentProxy.setMarkedText(
-            "",
-            selectedRange: NSRange(location: 0, length: 0)
-        )
-        textDocumentProxy.unmarkText()
-        textDocumentProxy.insertText(rawComposition)
-        pinyinComposition = ""
-        pinyinCandidates = []
-        PinyinInputEngine.resetComposition()
+        // Replace marked composition text (which may contain Rime syllable
+        // separators like "ge mi ni") with contiguous raw letters and commit,
+        // positioning the cursor at the end and preventing host desync.
+        replaceMarkedPinyinComposition(with: rawComposition)
         return true
     }
 
